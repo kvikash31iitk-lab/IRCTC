@@ -24,5 +24,31 @@
         "berth_preference": ""
       }
     ]
+  },
+  {
+    "preset_id": "21f3506d",
+    "label": "vikash",
+    "from_station": "NEW DELHI - NDLS",
+    "to_station": "PATNA JN - PNBE",
+    "journey_date": "2026-03-27",
+    "travel_class": "SL",
+    "quota": "TATKAL",
+    "train_number": "12394",
+    "mobile_number": "9830170806",
+    "email": "kvikash31.iitk@gmail.com",
+    "booking_url": "",
+    "availability_url": "",
+    "availability_keywords": [
+      "AVAILABLE",
+      "RAC"
+    ],
+    "passengers": [
+      {
+        "name": "vikash",
+        "age": 37,
+        "gender": "Male",
+        "berth_preference": "Lower"
+      }
+    ]
   }
 ]

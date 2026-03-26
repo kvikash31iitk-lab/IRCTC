@@ -191,6 +191,12 @@
     element.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key }));
   }
 
+  function closeOpenOverlays() {
+    document.body.click();
+    document.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }));
+    document.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: "Escape" }));
+  }
+
   function setSelectByText(select, text) {
     if (!select || !text) {
       return false;
@@ -308,10 +314,13 @@
       options.find((item) => normalize(item.textContent).includes(target));
 
     if (!option) {
+      closeOpenOverlays();
       return false;
     }
 
     option.click();
+    await sleep(200);
+    closeOpenOverlays();
     return true;
   }
 
@@ -352,6 +361,34 @@
     return lookup[raw.toUpperCase()] || raw;
   }
 
+  function classSearchTokens(value) {
+    const mapped = mapClassLabel(value);
+    const raw = String(value ?? "").trim().toUpperCase();
+    const tokens = [mapped, raw];
+
+    const aliases = {
+      "SL": ["Sleeper (SL)", "Sleeper"],
+      "3A": ["AC 3 Tier (3A)", "3A"],
+      "2A": ["AC 2 Tier (2A)", "2A"],
+      "1A": ["AC First Class (1A)", "1A"],
+      "3E": ["AC 3 Economy (3E)", "3E"],
+      "CC": ["AC Chair car (CC)", "Chair car", "CC"],
+      "EC": ["Exec. Chair Car (EC)", "EC"],
+      "2S": ["Second Sitting (2S)", "2S"],
+      "FC": ["First Class (FC)", "FC"],
+      "EA": ["Anubhuti Class (EA)", "EA"],
+      "VC": ["Vistadome Chair Car (VC)", "VC"],
+      "EV": ["Vistadome AC (EV)", "EV"],
+      "VS": ["Vistadome Non AC (VS)", "VS"],
+    };
+
+    if (aliases[raw]) {
+      tokens.push(...aliases[raw]);
+    }
+
+    return [...new Set(tokens.map(normalize).filter(Boolean))];
+  }
+
   function mapQuotaLabel(value) {
     const raw = String(value ?? "").trim();
     const lookup = {
@@ -377,6 +414,156 @@
     await setPrimeDropdown(SELECTORS.classDropdown, mapClassLabel(preset.travel_class));
     await sleep(300);
     await setPrimeDropdown(SELECTORS.quotaDropdown, mapQuotaLabel(preset.quota));
+  }
+
+  function findVisibleByText(textMatcher, selector = "button, a, div, span, strong") {
+    return [...document.querySelectorAll(selector)].filter((node) => {
+      return visible(node) && textMatcher(normalize(node.textContent));
+    });
+  }
+
+  function clickActionButton(labels) {
+    const targets = labels.map(normalize);
+    const button = [...document.querySelectorAll("button, a")].find((node) => {
+      const text = normalize(node.textContent);
+      const disabled =
+        node.disabled ||
+        node.getAttribute("aria-disabled") === "true" ||
+        normalize(node.className).includes("disabled");
+      return !disabled && targets.some((target) => text.includes(target));
+    });
+
+    if (!button) {
+      return false;
+    }
+
+    button.click();
+    return true;
+  }
+
+  function findTrainCard(trainNumber) {
+    const target = normalize(String(trainNumber || ""));
+    if (!target) {
+      return null;
+    }
+
+    const headings = [...document.querySelectorAll(".train-heading strong, .train-heading")].filter(visible);
+    for (const heading of headings) {
+      if (!normalize(heading.textContent).includes(target)) {
+        continue;
+      }
+
+      let current = heading;
+      for (let depth = 0; current && depth < 8; depth += 1) {
+        const hasBookNow = [...current.querySelectorAll("button, a")].some((node) =>
+          normalize(node.textContent).includes("book now")
+        );
+        if (hasBookNow) {
+          return current;
+        }
+        current = current.parentElement;
+      }
+    }
+
+    return null;
+  }
+
+  function clickPreferredClass(card, classValue) {
+    if (!card || !classValue) {
+      return false;
+    }
+
+    const targets = classSearchTokens(classValue);
+    const candidates = [...card.querySelectorAll("button, a, div, span")].filter(visible);
+    const match = candidates.find((node) => {
+      const text = normalize(node.textContent);
+      return (
+        targets.some((target) => text === target || text.includes(target)) &&
+        !text.includes("book now") &&
+        !text.includes("other dates") &&
+        !text.includes("refresh")
+      );
+    });
+
+    if (!match) {
+      return false;
+    }
+
+    match.click();
+    return true;
+  }
+
+  function clickBookNow(card) {
+    if (!card) {
+      return false;
+    }
+
+    const button = [...card.querySelectorAll("button, a")].find((node) => {
+      const text = normalize(node.textContent);
+      const disabled =
+        node.disabled ||
+        node.getAttribute("aria-disabled") === "true" ||
+        normalize(node.className).includes("disabled") ||
+        normalize(node.className).includes("disable-book");
+      return !disabled && text.includes("book now");
+    });
+
+    if (!button) {
+      return false;
+    }
+
+    button.click();
+    return true;
+  }
+
+  async function handleTrainListPage(preset) {
+    if (!window.location.pathname.includes("/nget/booking/train-list")) {
+      return false;
+    }
+
+    const card = findTrainCard(preset.train_number);
+    if (!card) {
+      showBanner(`Train ${preset.train_number || ""} not found on this results page.`, "error");
+      return false;
+    }
+
+    closeOpenOverlays();
+    await sleep(200);
+    clickPreferredClass(card, preset.travel_class);
+    await sleep(1000);
+    closeOpenOverlays();
+    await sleep(200);
+
+    if (clickBookNow(card)) {
+      showBanner(`Opened Book Now for train ${preset.train_number}.`);
+      return true;
+    }
+
+    showBanner(`Book Now not available for train ${preset.train_number}.`, "error");
+    return false;
+  }
+
+  async function handleSearchSubmission() {
+    const path = window.location.pathname;
+
+    if (path.includes("/nget/train-search")) {
+      await sleep(300);
+      if (clickActionButton(["Search Trains"])) {
+        showBanner("Clicked Search Trains.");
+        return true;
+      }
+    }
+
+    if (path.includes("/nget/booking/train-list")) {
+      closeOpenOverlays();
+      await sleep(300);
+      if (clickActionButton(["Modify Search"])) {
+        showBanner("Clicked Modify Search.");
+        return true;
+      }
+    }
+
+    return false;
   }
 
   function formatDate(value) {
@@ -477,7 +664,12 @@
         return;
       }
 
+      if (await handleTrainListPage(preset)) {
+        return;
+      }
+
       await fillSearchForm(preset);
+      await sleep(500);
       setNativeValue(findElement(SELECTORS.mobile), preset.mobile_number);
       setNativeValue(findElement(SELECTORS.email), preset.email);
 
@@ -485,6 +677,8 @@
         fillPassenger(passenger, index + 1);
       });
 
+      await sleep(400);
+      await handleSearchSubmission();
       showBanner(`Filled fields from preset: ${preset.label}`);
     } catch (error) {
       console.error("IRCTC Helper prefill failed", error);
