@@ -1,0 +1,127 @@
+[
+  {
+    "code": "NDLS",
+    "name": "NEW DELHI",
+    "city": "DELHI"
+  },
+  {
+    "code": "DLI",
+    "name": "DELHI JN",
+    "city": "DELHI"
+  },
+  {
+    "code": "PNBE",
+    "name": "PATNA JN",
+    "city": "PATNA"
+  },
+  {
+    "code": "HWH",
+    "name": "HOWRAH JN",
+    "city": "HOWRAH"
+  },
+  {
+    "code": "SBC",
+    "name": "KSR BENGALURU",
+    "city": "BENGALURU"
+  },
+  {
+    "code": "MAS",
+    "name": "MGR CHENNAI CTL",
+    "city": "CHENNAI"
+  },
+  {
+    "code": "CSTM",
+    "name": "MUMBAI CSMT",
+    "city": "MUMBAI"
+  },
+  {
+    "code": "MMCT",
+    "name": "MUMBAI CENTRAL",
+    "city": "MUMBAI"
+  },
+  {
+    "code": "BCT",
+    "name": "MUMBAI CENTRAL",
+    "city": "MUMBAI"
+  },
+  {
+    "code": "LKO",
+    "name": "LUCKNOW NR",
+    "city": "LUCKNOW"
+  },
+  {
+    "code": "CNB",
+    "name": "KANPUR CENTRAL",
+    "city": "KANPUR"
+  },
+  {
+    "code": "PRYJ",
+    "name": "PRAYAGRAJ JN",
+    "city": "PRAYAGRAJ"
+  },
+  {
+    "code": "BBS",
+    "name": "BHUBANESWAR",
+    "city": "BHUBANESWAR"
+  },
+  {
+    "code": "PURI",
+    "name": "PURI",
+    "city": "PURI"
+  },
+  {
+    "code": "RJPB",
+    "name": "RAJENDRANAGAR T",
+    "city": "PATNA"
+  },
+  {
+    "code": "GAYA",
+    "name": "GAYA JN",
+    "city": "GAYA"
+  },
+  {
+    "code": "JAT",
+    "name": "JAMMU TAWI",
+    "city": "JAMMU"
+  },
+  {
+    "code": "ASR",
+    "name": "AMRITSAR JN",
+    "city": "AMRITSAR"
+  },
+  {
+    "code": "LDH",
+    "name": "LUDHIANA JN",
+    "city": "LUDHIANA"
+  },
+  {
+    "code": "JP",
+    "name": "JAIPUR",
+    "city": "JAIPUR"
+  },
+  {
+    "code": "ADI",
+    "name": "AHMEDABAD JN",
+    "city": "AHMEDABAD"
+  },
+  {
+    "code": "BPL",
+    "name": "BHOPAL JN",
+    "city": "BHOPAL"
+  },
+  {
+    "code": "NGP",
+    "name": "NAGPUR",
+    "city": "NAGPUR"
+  },
+  {
+    "code": "TVC",
+    "name": "THIRUVANANTHAPURAM CENTRAL",
+    "city": "THIRUVANANTHAPURAM"
+  },
+  {
+    "code": "ERS",
+    "name": "ERNAKULAM JN",
+    "city": "KOCHI"
+  }
+]

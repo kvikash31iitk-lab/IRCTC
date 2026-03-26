@@ -1,0 +1,5 @@
+{
+  "open_time": "10:00",
+  "watch_interval_seconds": 60,
+  "notify_on_change_only": true
+}

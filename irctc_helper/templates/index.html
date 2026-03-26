@@ -1,0 +1,385 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>IRCTC Helper</title>
+    <style>
+      :root {
+        --bg: #f6f1e8;
+        --panel: #fffdf8;
+        --ink: #162521;
+        --accent: #b85042;
+        --accent-2: #e7b10a;
+        --line: #d9cbb8;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: Georgia, "Times New Roman", serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at top left, rgba(231, 177, 10, 0.18), transparent 20%),
+          linear-gradient(135deg, #f8f4ec, var(--bg));
+      }
+      .wrap {
+        width: min(1100px, calc(100% - 32px));
+        margin: 32px auto 48px;
+      }
+      .hero, .panel {
+        background: rgba(255, 253, 248, 0.92);
+        border: 1px solid var(--line);
+        border-radius: 20px;
+        box-shadow: 0 18px 50px rgba(22, 37, 33, 0.08);
+      }
+      .hero {
+        padding: 28px;
+        margin-bottom: 20px;
+      }
+      h1, h2 {
+        margin: 0 0 12px;
+        letter-spacing: 0.02em;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: 1.2fr 1fr;
+        gap: 20px;
+      }
+      .panel {
+        padding: 20px;
+      }
+      label {
+        display: block;
+        font-size: 0.9rem;
+        margin-top: 10px;
+        margin-bottom: 4px;
+      }
+      input, select, textarea, button {
+        width: 100%;
+        border-radius: 12px;
+        border: 1px solid var(--line);
+        padding: 10px 12px;
+        font: inherit;
+        background: #fff;
+      }
+      textarea { min-height: 90px; }
+      .row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+      }
+      .row-4 {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 10px;
+      }
+      button {
+        margin-top: 14px;
+        cursor: pointer;
+        background: var(--accent);
+        color: #fff;
+        border: none;
+      }
+      .ghost {
+        background: #fff;
+        color: var(--ink);
+        border: 1px solid var(--line);
+      }
+      .cards {
+        display: grid;
+        gap: 12px;
+      }
+      .card {
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 16px;
+        background: #fffdfa;
+      }
+      .card p {
+        margin: 6px 0;
+      }
+      .actions {
+        display: flex;
+        gap: 10px;
+      }
+      .subtle {
+        color: rgba(22, 37, 33, 0.72);
+      }
+      .station-field {
+        position: relative;
+      }
+      .station-suggestions {
+        position: absolute;
+        top: calc(100% + 6px);
+        left: 0;
+        right: 0;
+        z-index: 20;
+        margin: 0;
+        padding: 8px 0;
+        list-style: none;
+        background: #fffdfa;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        box-shadow: 0 16px 32px rgba(22, 37, 33, 0.12);
+        display: none;
+        max-height: 240px;
+        overflow: auto;
+      }
+      .station-suggestions.open {
+        display: block;
+      }
+      .station-suggestions li {
+        padding: 10px 14px;
+        cursor: pointer;
+      }
+      .station-suggestions li:hover,
+      .station-suggestions li.active {
+        background: rgba(184, 80, 66, 0.08);
+      }
+      .station-code {
+        display: inline-block;
+        min-width: 54px;
+        font-weight: 700;
+        color: var(--accent);
+      }
+      @media (max-width: 850px) {
+        .grid, .row, .row-4 { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <section class="hero">
+        <h1>IRCTC Helper</h1>
+        <p class="subtle">
+          Save trip presets, open your booking page on schedule, monitor an availability page for keywords,
+          and launch a local Selenium prefill helper without attempting to bypass protected IRCTC steps.
+        </p>
+      </section>
+
+      <div class="grid">
+        <section class="panel">
+          <h2>Create Trip Preset</h2>
+          <form method="post" action="/presets">
+            <label>Preset label</label>
+            <input name="label" required>
+
+            <div class="row">
+              <div class="station-field">
+                <label>From station</label>
+                <input name="from_station" id="from_station" autocomplete="off" required>
+                <ul class="station-suggestions" data-for="from_station"></ul>
+              </div>
+              <div class="station-field">
+                <label>To station</label>
+                <input name="to_station" id="to_station" autocomplete="off" required>
+                <ul class="station-suggestions" data-for="to_station"></ul>
+              </div>
+            </div>
+
+            <div class="row">
+              <div>
+                <label>Journey date</label>
+                <input type="date" name="journey_date" required>
+              </div>
+              <div>
+                <label>Train number</label>
+                <input name="train_number">
+              </div>
+            </div>
+
+            <div class="row">
+              <div>
+                <label>Class</label>
+                <select name="travel_class" required>
+                  <option value="">Select class</option>
+                  <option value="All Classes">All Classes</option>
+                  <option value="EA">Anubhuti Class (EA)</option>
+                  <option value="1A">AC First Class (1A)</option>
+                  <option value="2A">AC 2 Tier (2A)</option>
+                  <option value="3A">AC 3 Tier (3A)</option>
+                  <option value="3E">AC 3 Economy (3E)</option>
+                  <option value="EC">Exec. Chair Car (EC)</option>
+                  <option value="FC">First Class (FC)</option>
+                  <option value="CC">Chair Car (CC)</option>
+                  <option value="SL">Sleeper (SL)</option>
+                  <option value="2S">Second Sitting (2S)</option>
+                  <option value="VISTADOME AC (EV)">Vistadome AC (EV)</option>
+                  <option value="VISTADOME CHAIR CAR (VC)">Vistadome Chair Car (VC)</option>
+                  <option value="VISTADOME NON AC (VS)">Vistadome Non AC (VS)</option>
+                </select>
+              </div>
+              <div>
+                <label>Quota</label>
+                <select name="quota" required>
+                  <option value="">Select quota</option>
+                  <option value="GENERAL">GENERAL</option>
+                  <option value="TATKAL">TATKAL</option>
+                  <option value="LADIES">LADIES</option>
+                  <option value="LOWER BERTH/SR.CITIZEN">LOWER BERTH/SR.CITIZEN</option>
+                  <option value="PREMIUM TATKAL">PREMIUM TATKAL</option>
+                  <option value="PERSON WITH DISABILITY">PERSON WITH DISABILITY</option>
+                  <option value="DUTY PASS">DUTY PASS</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="row">
+              <div>
+                <label>Mobile number</label>
+                <input name="mobile_number">
+              </div>
+              <div>
+                <label>Email</label>
+                <input type="email" name="email">
+              </div>
+            </div>
+
+            <label>Booking URL</label>
+            <input name="booking_url" placeholder="Paste the IRCTC booking/search URL you want opened">
+
+            <p class="subtle" style="margin:8px 0 0;">
+              Start typing a station name or code and pick the exact `STATION - CODE` suggestion, like `NEW DELHI - NDLS`.
+            </p>
+
+            <label>Availability URL</label>
+            <input name="availability_url" placeholder="Optional page to watch for availability text">
+
+            <label>Availability keywords</label>
+            <input name="availability_keywords" value="AVAILABLE,RAC">
+
+            <h2 style="margin-top:18px;">Passengers</h2>
+            {% for i in range(1, 5) %}
+            <div class="row-4">
+              <input name="passenger_name_{{ i }}" placeholder="Passenger {{ i }} name">
+              <input name="passenger_age_{{ i }}" placeholder="Age">
+              <select name="passenger_gender_{{ i }}">
+                <option value="">Gender</option>
+                <option value="Male">Male</option>
+                <option value="Female">Female</option>
+                <option value="Transgender">Transgender</option>
+              </select>
+              <select name="passenger_berth_{{ i }}">
+                <option value="">Berth pref.</option>
+                <option value="No Preference">No Preference</option>
+                <option value="Lower">Lower</option>
+                <option value="Middle">Middle</option>
+                <option value="Upper">Upper</option>
+                <option value="Side Lower">Side Lower</option>
+                <option value="Side Upper">Side Upper</option>
+                <option value="Window Side">Window Side</option>
+              </select>
+            </div>
+            {% endfor %}
+
+            <button type="submit">Save Preset</button>
+          </form>
+        </section>
+
+        <section class="panel">
+          <h2>App Settings</h2>
+          <form method="post" action="/settings">
+            <label>Daily booking open time</label>
+            <input type="time" name="open_time" value="{{ settings.open_time }}">
+
+            <label>Watcher interval in seconds</label>
+            <input type="number" min="15" name="watch_interval_seconds" value="{{ settings.watch_interval_seconds }}">
+
+            <label style="display:flex; gap:10px; align-items:center; margin-top:14px;">
+              <input type="checkbox" name="notify_on_change_only" {% if settings.notify_on_change_only %}checked{% endif %} style="width:auto;">
+              Notify only when the match changes
+            </label>
+
+            <button type="submit">Update Settings</button>
+          </form>
+        </section>
+      </div>
+
+      <section class="panel" style="margin-top:20px;">
+        <h2>Saved Presets</h2>
+        <div class="cards">
+          {% for preset in presets %}
+          <article class="card">
+            <strong>{{ preset.label }}</strong>
+            <p>{{ preset.from_station }} to {{ preset.to_station }} on {{ preset.journey_date }}</p>
+            <p class="subtle">{{ preset.travel_class }} | {{ preset.quota }} | {{ preset.train_number or "No train number saved" }}</p>
+            <p class="subtle">{{ preset.passengers|length }} passenger(s)</p>
+            <div class="actions">
+              <form method="post" action="/prefill/{{ preset.preset_id }}">
+                <button type="submit">Launch Prefill</button>
+              </form>
+            </div>
+          </article>
+          {% else %}
+          <p class="subtle">No presets yet.</p>
+          {% endfor %}
+        </div>
+      </section>
+    </div>
+    <script>
+      async function fetchStations(query) {
+        const response = await fetch(`/api/stations?q=${encodeURIComponent(query)}`);
+        return response.json();
+      }
+
+      function renderSuggestions(list, items) {
+        list.innerHTML = "";
+        if (!items.length) {
+          list.classList.remove("open");
+          return;
+        }
+
+        items.forEach((item) => {
+          const row = document.createElement("li");
+          row.dataset.value = item.label;
+          row.innerHTML = `<span class="station-code">${item.code}</span>${item.name}${item.city ? ` <span class="subtle">(${item.city})</span>` : ""}`;
+          row.addEventListener("mousedown", (event) => {
+            event.preventDefault();
+            const input = document.getElementById(list.dataset.for);
+            input.value = item.label;
+            list.classList.remove("open");
+          });
+          list.appendChild(row);
+        });
+
+        list.classList.add("open");
+      }
+
+      function attachStationAutocomplete(inputId) {
+        const input = document.getElementById(inputId);
+        const list = document.querySelector(`.station-suggestions[data-for="${inputId}"]`);
+        let debounceTimer = null;
+
+        input.addEventListener("input", () => {
+          window.clearTimeout(debounceTimer);
+          const query = input.value.trim();
+
+          if (query.length < 2) {
+            list.classList.remove("open");
+            list.innerHTML = "";
+            return;
+          }
+
+          debounceTimer = window.setTimeout(async () => {
+            const items = await fetchStations(query);
+            renderSuggestions(list, items);
+          }, 180);
+        });
+
+        input.addEventListener("blur", () => {
+          window.setTimeout(() => list.classList.remove("open"), 120);
+        });
+
+        input.addEventListener("focus", async () => {
+          if (input.value.trim().length >= 2) {
+            const items = await fetchStations(input.value.trim());
+            renderSuggestions(list, items);
+          }
+        });
+      }
+
+      attachStationAutocomplete("from_station");
+      attachStationAutocomplete("to_station");
+    </script>
+  </body>
+  </html>
