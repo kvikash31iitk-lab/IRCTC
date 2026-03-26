@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Edit Preset - IRCTC Helper</title>
+    <style>
+      :root {
+        --bg: #f6f1e8;
+        --panel: #fffdf8;
+        --ink: #162521;
+        --accent: #b85042;
+        --line: #d9cbb8;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: Georgia, "Times New Roman", serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at top left, rgba(231, 177, 10, 0.18), transparent 20%),
+          linear-gradient(135deg, #f8f4ec, var(--bg));
+      }
+      .wrap {
+        width: min(980px, calc(100% - 32px));
+        margin: 32px auto 48px;
+      }
+      .hero, .panel {
+        background: rgba(255, 253, 248, 0.92);
+        border: 1px solid var(--line);
+        border-radius: 20px;
+        box-shadow: 0 18px 50px rgba(22, 37, 33, 0.08);
+      }
+      .hero {
+        padding: 28px;
+        margin-bottom: 20px;
+      }
+      .panel {
+        padding: 24px;
+      }
+      h1, h2 {
+        margin: 0 0 12px;
+        letter-spacing: 0.02em;
+      }
+      label {
+        display: block;
+        font-size: 0.9rem;
+        margin-top: 10px;
+        margin-bottom: 4px;
+      }
+      input, select, button {
+        width: 100%;
+        border-radius: 12px;
+        border: 1px solid var(--line);
+        padding: 10px 12px;
+        font: inherit;
+        background: #fff;
+      }
+      .row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+      }
+      .row-4 {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 10px;
+      }
+      .actions {
+        display: flex;
+        gap: 12px;
+        margin-top: 18px;
+      }
+      .actions a,
+      .actions button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        text-decoration: none;
+        cursor: pointer;
+      }
+      .primary {
+        background: var(--accent);
+        color: #fff;
+        border: none;
+      }
+      .ghost {
+        background: #fff;
+        color: var(--ink);
+        border: 1px solid var(--line);
+      }
+      .subtle {
+        color: rgba(22, 37, 33, 0.72);
+      }
+      .station-field {
+        position: relative;
+      }
+      .station-suggestions {
+        position: absolute;
+        top: calc(100% + 6px);
+        left: 0;
+        right: 0;
+        z-index: 20;
+        margin: 0;
+        padding: 8px 0;
+        list-style: none;
+        background: #fffdfa;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        box-shadow: 0 16px 32px rgba(22, 37, 33, 0.12);
+        display: none;
+        max-height: 240px;
+        overflow: auto;
+      }
+      .station-suggestions.open {
+        display: block;
+      }
+      .station-suggestions li {
+        padding: 10px 14px;
+        cursor: pointer;
+      }
+      .station-suggestions li:hover {
+        background: rgba(184, 80, 66, 0.08);
+      }
+      .station-code {
+        display: inline-block;
+        min-width: 54px;
+        font-weight: 700;
+        color: var(--accent);
+      }
+      @media (max-width: 850px) {
+        .row, .row-4, .actions { grid-template-columns: 1fr; }
+        .actions { display: grid; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <section class="hero">
+        <h1>Edit Preset</h1>
+        <p class="subtle">
+          Update this saved trip preset and keep the same preset ID for the Tampermonkey flow.
+        </p>
+      </section>
+
+      <section class="panel">
+        <h2>{{ preset.label }}</h2>
+        <form method="post" action="/presets/{{ preset.preset_id }}">
+          <label>Preset label</label>
+          <input name="label" value="{{ preset.label }}" required>
+
+          <div class="row">
+            <div class="station-field">
+              <label>From station</label>
+              <input name="from_station" id="from_station" value="{{ preset.from_station }}" autocomplete="off" required>
+              <ul class="station-suggestions" data-for="from_station"></ul>
+            </div>
+            <div class="station-field">
+              <label>To station</label>
+              <input name="to_station" id="to_station" value="{{ preset.to_station }}" autocomplete="off" required>
+              <ul class="station-suggestions" data-for="to_station"></ul>
+            </div>
+          </div>
+
+          <div class="row">
+            <div>
+              <label>Journey date</label>
+              <input type="date" name="journey_date" value="{{ preset.journey_date }}" required>
+            </div>
+            <div>
+              <label>Train number</label>
+              <input name="train_number" value="{{ preset.train_number }}">
+            </div>
+          </div>
+
+          <div class="row">
+            <div>
+              <label>Class</label>
+              <select name="travel_class" required>
+                <option value="" {% if not preset.travel_class %}selected{% endif %}>Select class</option>
+                <option value="All Classes" {% if preset.travel_class == "All Classes" %}selected{% endif %}>All Classes</option>
+                <option value="EA" {% if preset.travel_class == "EA" %}selected{% endif %}>Anubhuti Class (EA)</option>
+                <option value="1A" {% if preset.travel_class == "1A" %}selected{% endif %}>AC First Class (1A)</option>
+                <option value="2A" {% if preset.travel_class == "2A" %}selected{% endif %}>AC 2 Tier (2A)</option>
+                <option value="3A" {% if preset.travel_class == "3A" %}selected{% endif %}>AC 3 Tier (3A)</option>
+                <option value="3E" {% if preset.travel_class == "3E" %}selected{% endif %}>AC 3 Economy (3E)</option>
+                <option value="EC" {% if preset.travel_class == "EC" %}selected{% endif %}>Exec. Chair Car (EC)</option>
+                <option value="FC" {% if preset.travel_class == "FC" %}selected{% endif %}>First Class (FC)</option>
+                <option value="CC" {% if preset.travel_class == "CC" %}selected{% endif %}>Chair Car (CC)</option>
+                <option value="SL" {% if preset.travel_class == "SL" %}selected{% endif %}>Sleeper (SL)</option>
+                <option value="2S" {% if preset.travel_class == "2S" %}selected{% endif %}>Second Sitting (2S)</option>
+                <option value="VISTADOME AC (EV)" {% if preset.travel_class == "VISTADOME AC (EV)" %}selected{% endif %}>Vistadome AC (EV)</option>
+                <option value="VISTADOME CHAIR CAR (VC)" {% if preset.travel_class == "VISTADOME CHAIR CAR (VC)" %}selected{% endif %}>Vistadome Chair Car (VC)</option>
+                <option value="VISTADOME NON AC (VS)" {% if preset.travel_class == "VISTADOME NON AC (VS)" %}selected{% endif %}>Vistadome Non AC (VS)</option>
+              </select>
+            </div>
+            <div>
+              <label>Quota</label>
+              <select name="quota" required>
+                <option value="" {% if not preset.quota %}selected{% endif %}>Select quota</option>
+                <option value="GENERAL" {% if preset.quota == "GENERAL" %}selected{% endif %}>GENERAL</option>
+                <option value="TATKAL" {% if preset.quota == "TATKAL" %}selected{% endif %}>TATKAL</option>
+                <option value="LADIES" {% if preset.quota == "LADIES" %}selected{% endif %}>LADIES</option>
+                <option value="LOWER BERTH/SR.CITIZEN" {% if preset.quota == "LOWER BERTH/SR.CITIZEN" %}selected{% endif %}>LOWER BERTH/SR.CITIZEN</option>
+                <option value="PREMIUM TATKAL" {% if preset.quota == "PREMIUM TATKAL" %}selected{% endif %}>PREMIUM TATKAL</option>
+                <option value="PERSON WITH DISABILITY" {% if preset.quota == "PERSON WITH DISABILITY" %}selected{% endif %}>PERSON WITH DISABILITY</option>
+                <option value="DUTY PASS" {% if preset.quota == "DUTY PASS" %}selected{% endif %}>DUTY PASS</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="row">
+            <div>
+              <label>Mobile number</label>
+              <input name="mobile_number" value="{{ preset.mobile_number }}">
+            </div>
+            <div>
+              <label>Email</label>
+              <input type="email" name="email" value="{{ preset.email }}">
+            </div>
+          </div>
+
+          <label>Booking URL</label>
+          <input name="booking_url" value="{{ preset.booking_url }}" placeholder="Paste the IRCTC booking/search URL you want opened">
+
+          <p class="subtle" style="margin:8px 0 0;">
+            Start typing a station name or code and pick the exact `STATION - CODE` suggestion, like `NEW DELHI - NDLS`.
+          </p>
+
+          <label>Availability URL</label>
+          <input name="availability_url" value="{{ preset.availability_url }}" placeholder="Optional page to watch for availability text">
+
+          <label>Availability keywords</label>
+          <input name="availability_keywords" value="{{ preset.availability_keywords|join(',') }}">
+
+          <h2 style="margin-top:18px;">Passengers</h2>
+          {% for i in range(1, 5) %}
+          {% set passenger = preset.passengers[i-1] if preset.passengers|length >= i else None %}
+          <div class="row-4">
+            <input name="passenger_name_{{ i }}" placeholder="Passenger {{ i }} name" value="{{ passenger.name if passenger else '' }}">
+            <input name="passenger_age_{{ i }}" placeholder="Age" value="{{ passenger.age if passenger and passenger.age else '' }}">
+            <select name="passenger_gender_{{ i }}">
+              <option value="" {% if not passenger or not passenger.gender %}selected{% endif %}>Gender</option>
+              <option value="Male" {% if passenger and passenger.gender == "Male" %}selected{% endif %}>Male</option>
+              <option value="Female" {% if passenger and passenger.gender == "Female" %}selected{% endif %}>Female</option>
+              <option value="Transgender" {% if passenger and passenger.gender == "Transgender" %}selected{% endif %}>Transgender</option>
+            </select>
+            <select name="passenger_berth_{{ i }}">
+              <option value="" {% if not passenger or not passenger.berth_preference %}selected{% endif %}>Berth pref.</option>
+              <option value="No Preference" {% if passenger and passenger.berth_preference == "No Preference" %}selected{% endif %}>No Preference</option>
+              <option value="Lower" {% if passenger and passenger.berth_preference == "Lower" %}selected{% endif %}>Lower</option>
+              <option value="Middle" {% if passenger and passenger.berth_preference == "Middle" %}selected{% endif %}>Middle</option>
+              <option value="Upper" {% if passenger and passenger.berth_preference == "Upper" %}selected{% endif %}>Upper</option>
+              <option value="Side Lower" {% if passenger and passenger.berth_preference == "Side Lower" %}selected{% endif %}>Side Lower</option>
+              <option value="Side Upper" {% if passenger and passenger.berth_preference == "Side Upper" %}selected{% endif %}>Side Upper</option>
+              <option value="Window Side" {% if passenger and passenger.berth_preference == "Window Side" %}selected{% endif %}>Window Side</option>
+            </select>
+          </div>
+          {% endfor %}
+
+          <div class="actions">
+            <button type="submit" class="primary">Save Changes</button>
+            <a href="/" class="ghost">Cancel</a>
+          </div>
+        </form>
+      </section>
+    </div>
+    <script>
+      async function fetchStations(query) {
+        const response = await fetch(`/api/stations?q=${encodeURIComponent(query)}`);
+        return response.json();
+      }
+
+      function renderSuggestions(list, items) {
+        list.innerHTML = "";
+        if (!items.length) {
+          list.classList.remove("open");
+          return;
+        }
+
+        items.forEach((item) => {
+          const row = document.createElement("li");
+          row.dataset.value = item.label;
+          row.innerHTML = `<span class="station-code">${item.code}</span>${item.name}${item.city ? ` <span class="subtle">(${item.city})</span>` : ""}`;
+          row.addEventListener("mousedown", (event) => {
+            event.preventDefault();
+            const input = document.getElementById(list.dataset.for);
+            input.value = item.label;
+            list.classList.remove("open");
+          });
+          list.appendChild(row);
+        });
+
+        list.classList.add("open");
+      }
+
+      function attachStationAutocomplete(inputId) {
+        const input = document.getElementById(inputId);
+        const list = document.querySelector(`.station-suggestions[data-for="${inputId}"]`);
+        let debounceTimer = null;
+
+        input.addEventListener("input", () => {
+          window.clearTimeout(debounceTimer);
+          const query = input.value.trim();
+
+          if (query.length < 2) {
+            list.classList.remove("open");
+            list.innerHTML = "";
+            return;
+          }
+
+          debounceTimer = window.setTimeout(async () => {
+            const items = await fetchStations(query);
+            renderSuggestions(list, items);
+          }, 180);
+        });
+
+        input.addEventListener("blur", () => {
+          window.setTimeout(() => list.classList.remove("open"), 120);
+        });
+
+        input.addEventListener("focus", async () => {
+          if (input.value.trim().length >= 2) {
+            const items = await fetchStations(input.value.trim());
+            renderSuggestions(list, items);
+          }
+        });
+      }
+
+      attachStationAutocomplete("from_station");
+      attachStationAutocomplete("to_station");
+    </script>
+  </body>
+</html>

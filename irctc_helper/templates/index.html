@@ -102,6 +102,13 @@
         display: flex;
         gap: 10px;
       }
+      .actions form {
+        flex: 1;
+        margin: 0;
+      }
+      .actions button {
+        margin-top: 0;
+      }
       .subtle {
         color: rgba(22, 37, 33, 0.72);
       }
@@ -154,6 +161,11 @@
         <p class="subtle">
           Save trip presets, open your booking page on schedule, monitor an availability page for keywords,
           and launch a local Selenium prefill helper without attempting to bypass protected IRCTC steps.
+        </p>
+        <p style="margin:14px 0 0;">
+          <a href="/tampermonkey/irctc-helper.user.js" target="_blank" rel="noopener" style="color:var(--accent); font-weight:700;">
+            Install or update the Tampermonkey script
+          </a>
         </p>
       </section>
 
@@ -307,6 +319,12 @@
             <div class="actions">
               <form method="post" action="/prefill/{{ preset.preset_id }}">
                 <button type="submit">Launch Prefill</button>
+              </form>
+              <form method="get" action="/presets/{{ preset.preset_id }}/edit">
+                <button type="submit" class="ghost">Edit</button>
+              </form>
+              <form method="post" action="/presets/{{ preset.preset_id }}/delete" onsubmit="return confirm('Delete preset {{ preset.label }}?');">
+                <button type="submit" class="ghost">Delete</button>
               </form>
             </div>
           </article>

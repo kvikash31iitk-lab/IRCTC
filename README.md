@@ -39,7 +39,7 @@ Or on Windows with one double-click or one command:
 start.bat
 ```
 
-`start.bat` launches the app in the background and opens `http://127.0.0.1:5000` in your browser.
+`start.bat` launches the app in the background and opens `http://127.0.0.1:5000` in Chrome when Chrome is installed. If Chrome is not found, it falls back to your default browser.
 
 ## Notes on Selenium
 
