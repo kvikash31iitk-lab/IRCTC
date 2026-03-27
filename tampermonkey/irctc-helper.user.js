@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IRCTC Helper Prefill
 // @namespace    local.irctc.helper
-// @version      1.0.9
+// @version      1.1.0
 // @description  Fetches a saved preset from your local IRCTC Helper app and fills visible passenger/contact fields after you log in.
 // @match        https://www.irctc.co.in/*
 // @downloadURL  http://127.0.0.1:5000/tampermonkey/irctc-helper.user.js
@@ -1312,53 +1312,51 @@
     }
 
     const targets = classSearchTokens(preset.travel_class);
-    const candidates = [...card.querySelectorAll("button, a, div, span, label, li")]
+    // Only consider elements whose own text directly contains a class token.
+    // Exclude broad containers that merely have a class token somewhere in their subtree
+    // (those would include the pre-avl "Refresh" area and cause the wrong element to be clicked).
+    const candidates = [...card.querySelectorAll("button, a, li, p, span, div")]
       .filter(visible)
       .map((node) => {
-        const text = normalize(node.textContent);
-        const matches = targets.filter((target) => text === target || text.startsWith(target) || text.includes(target));
-        const excluded =
-          text.includes("book now") ||
-          text.includes("other dates") ||
-          text.includes("cnf probability") ||
-          text.includes("train schedule");
+        // Use the node's own direct text, not full subtree text, to avoid matching containers.
+        const ownText = normalize(
+          [...node.childNodes]
+            .filter((n) => n.nodeType === Node.TEXT_NODE)
+            .map((n) => n.textContent)
+            .join(" ")
+        ) || normalize(node.textContent);
 
-        return {
-          node,
-          text,
-          matches,
-          excluded,
-          hasRefresh: text.includes("refresh"),
-        };
+        const matches = targets.filter(
+          (target) => ownText === target || ownText.startsWith(target) || ownText.includes(target)
+        );
+
+        const excluded =
+          ownText.includes("book now") ||
+          ownText.includes("other dates") ||
+          ownText.includes("cnf probability") ||
+          ownText.includes("train schedule") ||
+          ownText.includes("refresh");  // Skip refresh containers — handled by clickPreAvlRefreshInCard.
+
+        return { node, text: ownText, matches, excluded };
       })
       .filter((item) => item.matches.length > 0 && !item.excluded)
       .sort((left, right) => {
-        if (left.hasRefresh !== right.hasRefresh) {
-          return left.hasRefresh ? -1 : 1;
-        }
-
+        // Prefer shorter text (closer to an exact match on the class label).
         const leftExact = left.matches.some((target) => left.text === target) ? 0 : 1;
         const rightExact = right.matches.some((target) => right.text === target) ? 0 : 1;
         if (leftExact !== rightExact) {
           return leftExact - rightExact;
         }
-
-        if (left.text.length !== right.text.length) {
-          return left.text.length - right.text.length;
-        }
-
-        return left.matches[0].length - right.matches[0].length;
+        return left.text.length - right.text.length;
       });
 
     for (const match of candidates) {
       const clickTargets = collectClassClickTargets(match.node, card, targets);
       for (const clickTarget of clickTargets) {
         triggerUiClick(clickTarget);
-        await sleep(700);
-        const refreshedCard = findTrainCardInDom(preset.train_number) || card;
-        if (isTrainCardActivated(refreshedCard, preset)) {
-          return true;
-        }
+        await sleep(500);
+        // Return true as soon as a class tile is clicked — activation is handled separately.
+        return true;
       }
     }
 
@@ -1373,87 +1371,102 @@
     return Boolean(findAvailabilityChoice(card, preset) || getBookNowButton(card));
   }
 
-  function findRefreshTargetsForClass(card, preset) {
-    if (!card || !preset?.travel_class) {
+  function findRefreshTargetsForClass(card) {
+    if (!card) {
       return [];
     }
 
-    const targets = classSearchTokens(preset.travel_class);
-    const matchingNodes = [...card.querySelectorAll("button, a, div, span, label, li")]
-      .filter(visible)
-      .filter((node) => {
-        const text = normalize(node.textContent);
-        return text && targets.some((target) => text.includes(target));
-      });
-
     const refreshTargets = [];
-    for (const node of matchingNodes) {
-      let current = node;
-      for (let depth = 0; current && current !== card && depth < 5; depth += 1) {
-        const exactRefreshLink = [
-          ...current.querySelectorAll("div.pre-avl[tabindex='0'] div.col-xs-12.link, div.pre-avl .col-xs-12.link, div.col-xs-12.link"),
-        ].find((child) => {
-          return visible(child) && normalize(child.textContent).includes("refresh");
-        });
 
-        const exactPreAvl = [
-          ...current.querySelectorAll("div.pre-avl[tabindex='0'], div[tabindex='0'].pre-avl"),
-        ].find(visible);
+    // Directly target pre-avl containers and their inner link divs.
+    const preAvlNodes = [...card.querySelectorAll(
+      "div.pre-avl[tabindex='0'], div[tabindex='0'].pre-avl, .pre-avl[tabindex='0']"
+    )].filter(visible);
 
-        if (exactRefreshLink) {
-          refreshTargets.push(exactRefreshLink);
-        }
+    for (const preAvl of preAvlNodes) {
+      const innerLink = [...preAvl.querySelectorAll("div.link, .col-xs-12.link, [class*='link']")]
+        .find((node) => visible(node) && normalize(node.textContent).includes("refresh"));
 
-        if (exactPreAvl) {
-          refreshTargets.push(exactPreAvl);
-        }
+      if (innerLink) {
+        refreshTargets.push(innerLink);
+      }
+      refreshTargets.push(preAvl);
+    }
 
-        const innerRefresh = [
-          ...current.querySelectorAll("button, a, div, span, i, svg"),
-        ].find((child) => {
-          if (!visible(child)) {
-            return false;
-          }
+    // Broader fallback: any visible div/span with "link" class containing "refresh".
+    const broadLinks = [...card.querySelectorAll("div.link, .link")]
+      .filter((node) => visible(node) && normalize(node.textContent).includes("refresh"));
+    refreshTargets.push(...broadLinks);
 
-          const text = normalize(child.textContent);
-          const classText = normalize(child.className);
-          return (
-            text.includes("refresh") ||
-            classText.includes("refresh") ||
-            classText.includes("sync") ||
-            classText.includes("reload")
-          );
-        });
+    return uniqueElements(refreshTargets.filter(Boolean));
+  }
 
-        if (innerRefresh) {
-          refreshTargets.push(resolveClickable(innerRefresh, current));
-        }
+  // Dedicated function: finds every visible pre-avl in the card, waits for one if needed,
+  // then activates it via focus+keyboard AND click on the inner refresh link.
+  async function clickPreAvlRefreshInCard(card, preset) {
+    if (!card) {
+      return false;
+    }
 
-        if (normalize(current.textContent).includes("refresh")) {
-          refreshTargets.push(resolveClickable(current, card));
-        }
+    // Wait up to 2 s for a pre-avl to become visible (it appears after class-tile click).
+    const waitDeadline = Date.now() + 2000;
+    while (Date.now() < waitDeadline) {
+      const preAvlNodes = [...card.querySelectorAll(
+        "div.pre-avl[tabindex='0'], div[tabindex='0'].pre-avl, .pre-avl[tabindex='0']"
+      )].filter(visible);
+      if (preAvlNodes.length > 0) {
+        break;
+      }
+      await sleep(200);
+    }
 
-        current = current.parentElement;
+    const preAvlNodes = [...card.querySelectorAll(
+      "div.pre-avl[tabindex='0'], div[tabindex='0'].pre-avl, .pre-avl[tabindex='0']"
+    )].filter(visible);
+
+    for (const preAvl of preAvlNodes) {
+      const innerLink = [...preAvl.querySelectorAll("div.link, .col-xs-12.link, [class*='link']")]
+        .find((node) => visible(node) && normalize(node.textContent).includes("refresh"))
+        || preAvl;
+
+      // Scroll, focus, and press Enter on the tabindex container (Angular keydown binding).
+      preAvl.scrollIntoView({ behavior: "smooth", block: "center" });
+      await sleep(120);
+      preAvl.focus();
+      preAvl.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" }));
+      preAvl.dispatchEvent(new KeyboardEvent("keypress", { bubbles: true, cancelable: true, key: "Enter" }));
+      preAvl.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, cancelable: true, key: "Enter" }));
+      await sleep(150);
+
+      // Also dispatch the full mouse event sequence on the inner link.
+      triggerUiClick(innerLink);
+      await sleep(1400);
+
+      const refreshedCard = findTrainCardInDom(preset.train_number) || card;
+      if (isTrainCardActivated(refreshedCard, preset)) {
+        return true;
       }
     }
 
-    return uniqueElements(refreshTargets);
+    return false;
   }
 
   async function clickPreferredRefresh(card, preset) {
-    const refreshTargets = findRefreshTargetsForClass(card, preset);
+    const refreshTargets = findRefreshTargetsForClass(card);
     for (const target of refreshTargets) {
       const focusTarget =
         target.closest?.("div.pre-avl[tabindex='0'], div[tabindex='0'].pre-avl") ||
         (target.getAttribute?.("tabindex") === "0" ? target : null);
 
       if (focusTarget) {
-        triggerFocusableActivation(focusTarget);
-        await sleep(180);
+        focusTarget.focus();
+        focusTarget.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" }));
+        focusTarget.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, cancelable: true, key: "Enter" }));
+        await sleep(150);
       }
 
       triggerUiClick(target);
-      await sleep(900);
+      await sleep(1000);
       const refreshedCard = findTrainCardInDom(preset.train_number) || card;
       if (isTrainCardActivated(refreshedCard, preset)) {
         return true;
@@ -1487,13 +1500,30 @@
 
     closeOpenOverlays();
     await sleep(200);
-    let activated = await clickPreferredClass(card, preset);
+
+    // Step 1: click the class tile to select it (may or may not load availability immediately).
+    await clickPreferredClass(card, preset);
+    await sleep(600);
+
+    // Step 2: directly target any pre-avl[tabindex='0'] in the card and activate it.
+    // This is the primary fix — the pre-avl inner link must be clicked via focus+Enter+click.
+    let freshCard = findTrainCardInDom(preset.train_number) || card;
+    let activated = await clickPreAvlRefreshInCard(freshCard, preset);
+
+    // Step 3: fallback — broader refresh-target search if direct pre-avl approach failed.
     if (!activated) {
-      activated = await clickPreferredRefresh(card, preset);
+      freshCard = findTrainCardInDom(preset.train_number) || card;
+      activated = await clickPreferredRefresh(freshCard, preset);
+    }
+
+    // Step 4: check if card is already showing availability (e.g. pre-loaded from search params).
+    if (!activated) {
+      freshCard = findTrainCardInDom(preset.train_number) || card;
+      activated = isTrainCardActivated(freshCard, preset);
     }
 
     if (!activated) {
-      showBanner(`Could not select ${mapClassLabel(preset.travel_class)} for train ${preset.train_number}.`, "error");
+      showBanner(`Could not activate availability for ${mapClassLabel(preset.travel_class)} on train ${preset.train_number}.`, "error");
       return false;
     }
 
