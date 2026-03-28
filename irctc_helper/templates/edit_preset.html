@@ -233,8 +233,14 @@
           <label>Availability keywords</label>
           <input name="availability_keywords" value="{{ preset.availability_keywords|join(',') }}">
 
+          <label style="display:flex; gap:10px; align-items:center; margin-top:14px;">
+            <input type="checkbox" name="is_default" {% if preset.is_default %}checked{% endif %} style="width:auto;">
+            Set as default preset (auto-selected by Tampermonkey — no picker dialog)
+          </label>
+
           <h2 style="margin-top:18px;">Passengers</h2>
-          {% for i in range(1, 5) %}
+          <p class="subtle" style="margin:0 0 8px;">Enter names <strong>exactly</strong> as they appear in your IRCTC master passenger list. The script will auto-select them from the dropdown.</p>
+          {% for i in range(1, 7) %}
           {% set passenger = preset.passengers[i-1] if preset.passengers|length >= i else None %}
           <div class="row-4">
             <input name="passenger_name_{{ i }}" placeholder="Passenger {{ i }} name" value="{{ passenger.name if passenger else '' }}">

@@ -59,8 +59,16 @@ def _build_preset_payload(form: Any, preset_id: str) -> dict[str, Any]:
             for keyword in form.get("availability_keywords", "").split(",")
             if keyword.strip()
         ],
+        "is_default": form.get("is_default") == "on",
         "passengers": passengers,
     }
+
+
+def _clear_other_defaults(presets: list[dict], keep_id: str) -> None:
+    """Ensure only one preset is marked as default."""
+    for preset in presets:
+        if preset["preset_id"] != keep_id:
+            preset["is_default"] = False
 
 
 def create_app() -> Flask:
@@ -120,7 +128,10 @@ def create_app() -> Flask:
     @app.post("/presets")
     def create_preset() -> Any:
         presets = load_presets()
-        presets.append(_build_preset_payload(request.form, str(uuid.uuid4())[:8]))
+        new_preset = _build_preset_payload(request.form, str(uuid.uuid4())[:8])
+        if new_preset.get("is_default"):
+            _clear_other_defaults(presets, new_preset["preset_id"])
+        presets.append(new_preset)
         save_presets(presets)
         return redirect(url_for("index"))
 
@@ -139,7 +150,10 @@ def create_app() -> Flask:
         if preset_index is None:
             abort(404)
 
-        presets[preset_index] = _build_preset_payload(request.form, preset_id)
+        updated = _build_preset_payload(request.form, preset_id)
+        if updated.get("is_default"):
+            _clear_other_defaults(presets, preset_id)
+        presets[preset_index] = updated
         save_presets(presets)
         return redirect(url_for("index"))
 
@@ -169,7 +183,7 @@ def create_app() -> Flask:
 
 def _extract_passengers(form: Any) -> list[dict]:
     passengers = []
-    for index in range(1, 5):
+    for index in range(1, 7):
         name = form.get(f"passenger_name_{index}", "").strip()
         age = form.get(f"passenger_age_{index}", "").strip()
         gender = form.get(f"passenger_gender_{index}", "").strip()

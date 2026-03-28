@@ -260,8 +260,14 @@
             <label>Availability keywords</label>
             <input name="availability_keywords" value="AVAILABLE,RAC">
 
+            <label style="display:flex; gap:10px; align-items:center; margin-top:14px;">
+              <input type="checkbox" name="is_default" style="width:auto;">
+              Set as default preset (auto-selected by Tampermonkey — no picker dialog)
+            </label>
+
             <h2 style="margin-top:18px;">Passengers</h2>
-            {% for i in range(1, 5) %}
+            <p class="subtle" style="margin:0 0 8px;">Enter names exactly as they appear in your IRCTC master passenger list.</p>
+            {% for i in range(1, 7) %}
             <div class="row-4">
               <input name="passenger_name_{{ i }}" placeholder="Passenger {{ i }} name">
               <input name="passenger_age_{{ i }}" placeholder="Age">
@@ -313,6 +319,7 @@
           {% for preset in presets %}
           <article class="card">
             <strong>{{ preset.label }}</strong>
+            {% if preset.is_default %}<span style="color:var(--accent-2);font-weight:700;margin-left:8px;">⭐ Default</span>{% endif %}
             <p>{{ preset.from_station }} to {{ preset.to_station }} on {{ preset.journey_date }}</p>
             <p class="subtle">{{ preset.travel_class }} | {{ preset.quota }} | {{ preset.train_number or "No train number saved" }}</p>
             <p class="subtle">{{ preset.passengers|length }} passenger(s)</p>
