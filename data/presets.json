@@ -1,39 +1,13 @@
 [
   {
-    "preset_id": "ff635461",
-    "label": "vikash ndls to pnbe",
-    "from_station": "ndls",
-    "to_station": "pnbe",
-    "journey_date": "2026-03-28",
-    "travel_class": "SL",
-    "quota": "General",
-    "train_number": "12394",
-    "mobile_number": "9830170806",
-    "email": "kvikash31.iitk@gmail.com",
-    "booking_url": "https://www.irctc.co.in/nget/train-search",
-    "availability_url": "",
-    "availability_keywords": [
-      "AVAILABLE",
-      "RAC"
-    ],
-    "passengers": [
-      {
-        "name": "vikash",
-        "age": 37,
-        "gender": "m",
-        "berth_preference": ""
-      }
-    ]
-  },
-  {
-    "preset_id": "21f3506d",
-    "label": "vikash",
+    "preset_id": "6be5202f",
+    "label": "vikash kanpur ",
     "from_station": "NEW DELHI - NDLS",
-    "to_station": "PATNA JN - PNBE",
-    "journey_date": "2026-03-27",
+    "to_station": "KANPUR CENTRAL - CNB",
+    "journey_date": "2026-04-03",
     "travel_class": "SL",
     "quota": "TATKAL",
-    "train_number": "12394",
+    "train_number": "12312",
     "mobile_number": "9830170806",
     "email": "kvikash31.iitk@gmail.com",
     "booking_url": "",
@@ -42,10 +16,11 @@
       "AVAILABLE",
       "RAC"
     ],
+    "is_default": true,
     "passengers": [
       {
-        "name": "vikash",
-        "age": 37,
+        "name": "vikash kumar",
+        "age": 38,
         "gender": "Male",
         "berth_preference": "Lower"
       }

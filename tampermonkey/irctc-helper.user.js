@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IRCTC Helper Prefill
 // @namespace    local.irctc.helper
-// @version      2.8.3
+// @version      3.0.1
 // @description  Fetches a saved preset from your local IRCTC Helper app and fills visible passenger/contact fields after you log in.
 // @match        https://www.irctc.co.in/*
 // @downloadURL  http://127.0.0.1:5000/tampermonkey/irctc-helper.user.js
@@ -23,6 +23,51 @@
   const API_BASE = "http://127.0.0.1:5000/api";
   let loginWatcherId = null;
   let homeFlowStarted = false;
+
+  // Booking timer — starts when GO is pressed, shows elapsed time.
+  let bookingTimerStart = null;
+  let bookingTimerElement = null;
+  let bookingTimerInterval = null;
+
+  function startBookingTimer() {
+    bookingTimerStart = Date.now();
+    if (bookingTimerElement) bookingTimerElement.remove();
+
+    const el = document.createElement("div");
+    el.id = "irctc-booking-timer";
+    el.style.cssText = [
+      "position:fixed", "bottom:12px", "left:12px", "z-index:999999",
+      "padding:8px 16px", "border-radius:10px",
+      "background:rgba(15,23,42,0.92)", "color:#38bdf8",
+      "font:700 16px/1 system-ui,monospace", "letter-spacing:1px",
+      "box-shadow:0 4px 12px rgba(0,0,0,.3)",
+    ].join(";");
+    el.textContent = "⏱ 0.0s";
+    document.body.appendChild(el);
+    bookingTimerElement = el;
+
+    bookingTimerInterval = window.setInterval(() => {
+      if (!bookingTimerStart) return;
+      // Re-attach if Angular navigation removed the element from DOM.
+      if (!document.body.contains(bookingTimerElement)) {
+        document.body.appendChild(bookingTimerElement);
+      }
+      const elapsed = ((Date.now() - bookingTimerStart) / 1000).toFixed(1);
+      bookingTimerElement.textContent = `⏱ ${elapsed}s`;
+    }, 100);
+  }
+
+  function stopBookingTimer(label) {
+    if (!bookingTimerStart) return;
+    const elapsed = ((Date.now() - bookingTimerStart) / 1000).toFixed(1);
+    if (bookingTimerInterval) window.clearInterval(bookingTimerInterval);
+    if (bookingTimerElement) {
+      bookingTimerElement.textContent = `⏱ ${elapsed}s — ${label || "done"}`;
+      bookingTimerElement.style.background = "rgba(22,163,74,0.92)";
+      bookingTimerElement.style.color = "#fff";
+    }
+    console.log(`[IRCTC Helper] Booking timer: ${elapsed}s (${label})`);
+  }
 
   const SELECTORS = {
     from: [
@@ -348,7 +393,7 @@
     return true;
   }
 
-  async function typeNativeValue(element, value, delayMs = 28, options = {}) {
+  async function typeNativeValue(element, value, delayMs = 10, options = {}) {
     if (!element || value === undefined || value === null || value === "") {
       return false;
     }
@@ -369,7 +414,7 @@
     }
 
     clearNativeValue(element);
-    await sleep(90);
+    await sleep(40);
 
     let current = "";
     for (const char of text) {
@@ -399,7 +444,7 @@
       element.dispatchEvent(new Event("blur", { bubbles: true }));
     }
 
-    await sleep(180);
+    await sleep(80);
 
     return normalize(textFromNode(element)) === normalize(text);
   }
@@ -585,7 +630,7 @@
 
     for (const target of clickTargets) {
       triggerUiClick(target);
-      await sleep(220);
+      await sleep(100);
 
       const panel = getVisibleCalendarPanel();
       if (panel) {
@@ -596,7 +641,7 @@
     input.focus();
     input.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown", altKey: true }));
     input.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: "ArrowDown", altKey: true }));
-    await sleep(220);
+    await sleep(100);
     return getVisibleCalendarPanel();
   }
 
@@ -646,7 +691,7 @@
       }
 
       triggerUiClick(nav);
-      await sleep(320);
+      await sleep(150);
       panel = getVisibleCalendarPanel() || panel;
 
       const updated = readCalendarMonthYear(panel);
@@ -655,7 +700,7 @@
         updated.year === current.year &&
         updated.monthIndex === current.monthIndex
       ) {
-        await sleep(320);
+        await sleep(150);
         panel = getVisibleCalendarPanel() || panel;
       }
     }
@@ -756,7 +801,7 @@
     setNativeValue(input, value);
     input.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" }));
     input.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: "ArrowDown" }));
-    await sleep(1200);
+    await sleep(500);
 
     const candidates = [
       ...document.querySelectorAll("li[role='option'], .ui-autocomplete-item, .p-autocomplete-item"),
@@ -814,7 +859,7 @@
       dropdown.querySelector(".ui-dropdown-trigger, .p-dropdown-trigger, .ui-dropdown-label, .p-dropdown-label") ||
       dropdown;
     trigger.click();
-    await sleep(700);
+    await sleep(350);
 
     const options = [
       ...document.querySelectorAll("li[role='option'], .p-dropdown-item, .ui-dropdown-item"),
@@ -845,11 +890,11 @@
 
     const formatted = formatDate(value);
 
-    if (await typeNativeValue(input, formatted, 28, { confirmKey: "Enter" })) {
-      await sleep(900);
+    if (await typeNativeValue(input, formatted, 10, { confirmKey: "Enter" })) {
+      await sleep(450);
       input.dispatchEvent(new Event("change", { bubbles: true }));
       input.dispatchEvent(new Event("blur", { bubbles: true }));
-      await sleep(220);
+      await sleep(100);
 
       if (matchesDateValue(textFromNode(input), value)) {
         return true;
@@ -945,13 +990,13 @@
   async function fillSearchForm(preset) {
     const applyFields = async (root) => {
       await setPrimeAutocomplete(SELECTORS.from, preset.from_station, root);
-      await sleep(100);
+      await sleep(50);
       await setPrimeAutocomplete(SELECTORS.to, preset.to_station, root);
-      await sleep(100);
+      await sleep(50);
       await setJourneyDate(preset.journey_date, root);
-      await sleep(100);
+      await sleep(50);
       await setPrimeDropdown(SELECTORS.classDropdown, mapClassLabel(preset.travel_class), root);
-      await sleep(100);
+      await sleep(50);
       await setPrimeDropdown(SELECTORS.quotaDropdown, mapQuotaLabel(preset.quota), root);
     };
 
@@ -1354,20 +1399,26 @@
   }
 
   async function findTrainCard(trainNumber) {
-    // Wait for train list results to render (IRCTC Angular takes a moment).
-    for (let waitAttempt = 0; waitAttempt < 10; waitAttempt += 1) {
+    // Wait for train list results to render — fast poll, bail early.
+    for (let waitAttempt = 0; waitAttempt < 15; waitAttempt += 1) {
+      // Check for our specific train first (fastest path).
+      const earlyCard = findTrainCardInDom(trainNumber);
+      if (earlyCard) {
+        earlyCard.scrollIntoView({ behavior: "auto", block: "center" });
+        return earlyCard;
+      }
+      // Check if ANY train has rendered yet.
       const anyTrain = document.querySelector(".train-heading, strong");
       if (anyTrain && /\(\d{4,5}\)/.test(anyTrain.textContent || "")) {
         break;
       }
-      await sleep(500);
+      await sleep(150);
     }
 
-    // First check without scrolling — the card may already be in the DOM.
+    // Check without scrolling — the card may already be in the DOM.
     const immediateCard = findTrainCardInDom(trainNumber);
     if (immediateCard) {
-      immediateCard.scrollIntoView({ behavior: "smooth", block: "center" });
-      await sleep(500);
+      immediateCard.scrollIntoView({ behavior: "auto", block: "center" });
       return immediateCard;
     }
 
@@ -1376,13 +1427,12 @@
     let previousScrollTop = -1;
 
     for (let attempt = 0; attempt < 15; attempt += 1) {
-      window.scrollBy({ top: Math.max(window.innerHeight * 0.7, 500), behavior: "smooth" });
-      await sleep(600);
+      window.scrollBy({ top: Math.max(window.innerHeight * 0.85, 600), behavior: "auto" });
+      await sleep(200);
 
       const card = findTrainCardInDom(trainNumber);
       if (card) {
-        card.scrollIntoView({ behavior: "smooth", block: "center" });
-        await sleep(500);
+        card.scrollIntoView({ behavior: "auto", block: "center" });
         return card;
       }
 
@@ -1566,7 +1616,7 @@
       // Use the native HTMLElement.click() which Angular patches via Zone.js.
       if (typeof clickTarget.click === "function") {
         clickTarget.click();
-        await sleep(1000);
+        await sleep(600);
 
         refreshedCard = findTrainCardInDom(preset.train_number) || card;
         if (isTrainCardActivated(refreshedCard, preset)) {
@@ -1593,7 +1643,7 @@
       }
 
       triggerUiClick(target);
-      await sleep(1000);
+      await sleep(600);
       const refreshedCard = findTrainCardInDom(preset.train_number) || card;
       if (isTrainCardActivated(refreshedCard, preset)) {
         return true;
@@ -1653,11 +1703,10 @@
     }
 
     closeOpenOverlays();
-    await sleep(100);
 
     // Step 1: click the class tile to select it (may or may not load availability immediately).
     await clickPreferredClass(card, preset);
-    await sleep(300);
+    await sleep(150);
 
     // Step 2: directly target any pre-avl[tabindex='0'] in the card and activate it.
     let freshCard = findTrainCardInDom(preset.train_number) || card;
@@ -1680,14 +1729,14 @@
       return false;
     }
 
-    await sleep(400);
-    const availabilityClicked = await clickAvailabilityChoice(findTrainCardInDom(preset.train_number) || card, preset, 2000);
+    await sleep(200);
+    const availabilityClicked = await clickAvailabilityChoice(findTrainCardInDom(preset.train_number) || card, preset, 1500);
     if (availabilityClicked) {
-      await sleep(300);
+      await sleep(150);
     }
 
     const refreshedCard = findTrainCardInDom(preset.train_number) || card;
-    const bookNowButton = await waitForBookNowButton(refreshedCard, 3000);
+    const bookNowButton = await waitForBookNowButton(refreshedCard, 2000);
     if (bookNowButton) {
       const clicked = await clickBookNowWithRetry(bookNowButton, preset.train_number);
       if (clicked) {
@@ -1720,7 +1769,7 @@
       if (typeof button.click === "function") {
         button.click();
       }
-      await sleep(400);
+      await sleep(200);
 
       // Check if navigation happened or confirmation dialog appeared.
       if (await checkBookNowSuccess()) {
@@ -1732,7 +1781,7 @@
 
       // Strategy 2: full mouse event sequence.
       triggerUiClick(button);
-      await sleep(400);
+      await sleep(200);
 
       if (await checkBookNowSuccess()) {
         showBanner(`Opened Book Now for train ${trainNumber}.`);
@@ -1743,7 +1792,7 @@
 
       // Strategy 3: focus + Enter key.
       triggerFocusableActivation(button);
-      await sleep(400);
+      await sleep(200);
 
       if (await checkBookNowSuccess()) {
         showBanner(`Opened Book Now for train ${trainNumber}.`);
@@ -1756,7 +1805,7 @@
       const innerButton = button.querySelector("button, a, [role='button']");
       if (innerButton && innerButton !== button) {
         innerButton.click();
-        await sleep(400);
+        await sleep(200);
         if (await checkBookNowSuccess()) {
           showBanner(`Opened Book Now for train ${trainNumber}.`);
           await sleep(500);
@@ -1769,7 +1818,7 @@
       const parentClickable = button.closest("button") || button.closest("a[href]") || button.parentElement?.closest("button");
       if (parentClickable && parentClickable !== button) {
         parentClickable.click();
-        await sleep(400);
+        await sleep(200);
         if (await checkBookNowSuccess()) {
           showBanner(`Opened Book Now for train ${trainNumber}.`);
           await sleep(500);
@@ -2188,30 +2237,31 @@
 
     setNativeValue(nameInput, "");
     nameInput.dispatchEvent(new Event("input", { bubbles: true }));
-    await sleep(200);
+    // Just click the field — IRCTC shows the full master list dropdown on focus.
+    nameInput.click();
+    nameInput.focus();
+    nameInput.dispatchEvent(new Event("input", { bubbles: true }));
 
-    // Type just the first 3-4 characters to trigger the dropdown quickly.
-    // No need to type the full name — IRCTC filters as you type.
-    const typePart = passengerName.slice(0, Math.min(4, passengerName.length));
-    for (const char of typePart) {
-      nameInput.value += char;
-      nameInput.dispatchEvent(new Event("input", { bubbles: true }));
-      nameInput.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: char }));
-      nameInput.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: char }));
-      await sleep(40);
-    }
-
-    await sleep(800);
-
-    // Find the matching entry in the dropdown.
-    const found = await waitForMasterListEntry(passengerName, 4000);
+    // Find and click the matching entry directly.
+    const found = await waitForMasterListEntry(passengerName, 2500);
     if (found) {
-      found.scrollIntoView({ behavior: "smooth", block: "center" });
-      await sleep(100);
       found.click();
       triggerUiClick(found);
       console.log(`[IRCTC Helper] Selected "${passengerName}" from master list (passenger ${index}).`);
-      await sleep(400);
+      await sleep(100);
+      return true;
+    }
+
+    // Fallback: try typing first 3 chars if click-only didn't trigger dropdown.
+    const typePart = passengerName.slice(0, 3);
+    nameInput.value = typePart;
+    nameInput.dispatchEvent(new Event("input", { bubbles: true }));
+    const found2 = await waitForMasterListEntry(passengerName, 1500);
+    if (found2) {
+      found2.click();
+      triggerUiClick(found2);
+      console.log(`[IRCTC Helper] Selected "${passengerName}" via type fallback (passenger ${index}).`);
+      await sleep(100);
       return true;
     }
 
@@ -2220,14 +2270,14 @@
   }
 
   // Wait for a dropdown entry that fuzzy-matches the passenger name.
-  async function waitForMasterListEntry(presetName, timeoutMs = 4000) {
+  async function waitForMasterListEntry(presetName, timeoutMs = 2500) {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       const entry = findMasterListEntry(presetName);
       if (entry) {
         return entry;
       }
-      await sleep(250);
+      await sleep(80);
     }
     return findMasterListEntry(presetName);
   }
@@ -2351,7 +2401,7 @@
     }
 
     showBanner(`Filling ${passengers.length} passenger(s) from preset...`);
-    await sleep(2000); // Let the page fully render including loyalty section.
+    await sleep(1000); // Let the page fully render including loyalty section.
 
     // FIRST: Click "Skip" for loyalty points — must happen before everything else.
     // Try up to 3 times with waits, since the loyalty section may render late.
@@ -2435,7 +2485,7 @@
     showBanner(`Filled ${passengers.length} passenger(s) from preset. Clicking Continue...`);
 
     // Wait for Angular to process the loyalty/insurance selections.
-    await sleep(1500);
+    await sleep(600);
     const continueBtn = [...document.querySelectorAll("button")].find((btn) => {
       return visible(btn) && normalize(btn.textContent).trim() === "continue";
     }) || [...document.querySelectorAll("button")].find((btn) => {
@@ -2460,9 +2510,10 @@
     if (!isReviewPage()) {
       return;
     }
+    stopBookingTimer("Captcha page reached");
 
     console.log("[IRCTC Helper] Review/Captcha page detected.");
-    await sleep(1500); // Let the page render fully.
+    await sleep(800); // Let the page render fully.
 
     // Find the captcha image.
     const captchaImg = document.querySelector(
@@ -3462,7 +3513,9 @@
   async function launchGo() {
     removeGoButton();
     homeFlowStarted = true;
+    startBookingTimer();
     console.log("[IRCTC Helper] launchGo called.");
+    showBanner("GO! Starting booking flow...");
 
     try {
       // If there's a default preset, use it directly; otherwise show picker.
@@ -3473,11 +3526,13 @@
         showBanner(`Using default preset: ${defaultPreset.label}`);
         await runPrefill({ autoFallback: true });
       } else {
+        showBanner("No default preset — showing picker...");
         await runPrefill({ forcePick: true });
       }
     } catch (err) {
       console.error("[IRCTC Helper] launchGo error:", err);
       showBanner("GO failed: " + (err.message || err), "error");
+      stopBookingTimer("FAILED");
     }
   }
 
@@ -3559,6 +3614,10 @@
     // (within 2 seconds of 10:00:00), not anytime after 10:00.
     let tatkalAutoLaunched = false;
     countdownIntervalId = window.setInterval(() => {
+      // Re-attach if Angular navigation removed the GO panel from DOM.
+      if (goButtonElement && !document.body.contains(goButtonElement)) {
+        document.body.appendChild(goButtonElement);
+      }
       const remaining = secondsUntilTatkal();
       countdown.textContent = formatCountdown(remaining);
 
@@ -3604,7 +3663,7 @@
 
     maybeShowGo();
     if (!goButtonElement && !homeFlowStarted) {
-      loginWatcherId = window.setInterval(maybeShowGo, 500);
+      loginWatcherId = window.setInterval(maybeShowGo, 300);
     }
   }
 
@@ -3637,17 +3696,17 @@
     }
 
     if (isTrainSearchPage()) {
-      window.setTimeout(startHomePageLoginFlow, 800);
+      window.setTimeout(startHomePageLoginFlow, 200);
       return;
     }
 
     if (isTrainListPage()) {
-      window.setTimeout(() => runPrefill({ autoFallback: true, promptIfMissing: true }), 1200);
+      window.setTimeout(() => runPrefill({ autoFallback: true, promptIfMissing: true }), 300);
       return;
     }
 
     if (isPassengerPage()) {
-      window.setTimeout(() => runPrefill({ autoFallback: true, promptIfMissing: true }), 1200);
+      window.setTimeout(() => runPrefill({ autoFallback: true, promptIfMissing: true }), 400);
       return;
     }
 
