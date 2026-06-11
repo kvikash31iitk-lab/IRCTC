@@ -317,6 +317,12 @@ class BookingEngine:
 
         Returns True and sets ``self.page`` on success; False to fall through
         to the profile/clean strategies.
+
+        Profile priority: user's real Chrome Default profile (saved IRCTC
+        cookies, normal appearance — not an incognito-looking fresh profile).
+        Chrome 136+ blocks CDP on the Default profile and exits immediately;
+        in that case we automatically retry with the dedicated irctc-tatkal
+        profile.
         """
         chrome = self._find_chrome_exe()
         if not chrome:
@@ -326,34 +332,72 @@ class BookingEngine:
         # If something is already serving the debug port (e.g. a previous run),
         # attach to it rather than launching a second Chrome.
         if not self._cdp_endpoint_ready(CDP_PORT):
-            profile = self._cdp_profile_dir()
-            self._status(f"Starting Chrome for CDP (profile: {profile}).")
-            self._chrome_proc = subprocess.Popen(
-                [
-                    chrome,
-                    f"--remote-debugging-port={CDP_PORT}",
-                    f"--user-data-dir={profile}",
-                    "--no-first-run",
-                    "--no-default-browser-check",
-                    "--start-maximized",
-                    SEARCH_URL,
-                ],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            deadline = time.monotonic() + 30
-            while time.monotonic() < deadline:
-                if self._chrome_proc.poll() is not None:
-                    self._status("Chrome exited immediately (already running on "
-                                 "this profile?) — CDP mode unavailable.")
-                    return False
-                if self._cdp_endpoint_ready(CDP_PORT):
+            # Build ordered list of profiles to try.
+            chrome_base = self._chrome_user_data_dir()
+            default_prof = (chrome_base / "Default"
+                            if chrome_base and (chrome_base / "Default").exists()
+                            else None)
+            profiles_to_try: list[tuple[Path, str]] = []
+            if default_prof:
+                profiles_to_try.append((default_prof, "Default profile"))
+            profiles_to_try.append((self._cdp_profile_dir(), "dedicated IRCTC profile"))
+
+            launched = False
+            for profile, profile_label in profiles_to_try:
+                self._status(f"Starting Chrome via CDP ({profile_label}).")
+                self._chrome_proc = subprocess.Popen(
+                    [
+                        chrome,
+                        f"--remote-debugging-port={CDP_PORT}",
+                        f"--user-data-dir={profile}",
+                        "--no-first-run",
+                        "--no-default-browser-check",
+                        "--start-maximized",
+                        SEARCH_URL,
+                    ],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                # 4-second quick check: open port = success, exit = refused, neither = still loading
+                t0 = time.monotonic()
+                while time.monotonic() - t0 < 4.0:
+                    if self._chrome_proc.poll() is not None:
+                        break
+                    if self._cdp_endpoint_ready(CDP_PORT):
+                        launched = True
+                        break
+                    time.sleep(0.25)
+                if launched:
                     break
-                time.sleep(0.3)
-            else:
-                self._status("Chrome debug port never opened — falling back.")
-                self._kill_chrome_proc()
-                return False
+                if self._chrome_proc.poll() is not None:
+                    self._kill_chrome_proc()
+                    if default_prof and profile == default_prof:
+                        self._status(
+                            "Chrome refused CDP on Default profile "
+                            "(Chrome 136+ restriction) — retrying with dedicated IRCTC profile."
+                        )
+                        continue
+                    self._status("Chrome exited immediately (profile locked?) "
+                                 "— CDP mode unavailable.")
+                    return False
+                # Port not open in 4 s but Chrome still running — fall through to long wait.
+
+            if not launched:
+                if not self._chrome_proc:
+                    return False  # all profiles rejected immediately
+                deadline = time.monotonic() + 26  # ~4 s already spent above
+                while time.monotonic() < deadline:
+                    if self._chrome_proc.poll() is not None:
+                        self._status("Chrome exited during startup — CDP mode unavailable.")
+                        return False
+                    if self._cdp_endpoint_ready(CDP_PORT):
+                        launched = True
+                        break
+                    time.sleep(0.3)
+                if not launched:
+                    self._status("Chrome debug port never opened — falling back.")
+                    self._kill_chrome_proc()
+                    return False
 
         self._browser = self._pw.chromium.connect_over_cdp(f"http://127.0.0.1:{CDP_PORT}")
         try:
@@ -796,28 +840,37 @@ class BookingEngine:
     def _fill_station(self, index: int, station: str) -> None:
         name, code = self._split_station(station)
         label = "From" if index == 0 else "To"
+        self._status(f"Filling {label} station: {station}")
         box = self._station_box(index)
         box.click()
         box.fill("")
         # The station code is the most selective query; fall back to the name.
         self._type_slow(box, code or name[:4])
         needles = [station, f"- {code}" if code else "", code or "", name[:6]]
-        if not self._pick_autocomplete_item([n for n in needles if n], timeout_s=5.0):
+        picked = self._pick_autocomplete_item([n for n in needles if n], timeout_s=6.0)
+        if not picked:
             # Retry once with the name prefix (some codes don't match-as-typed).
             box.fill("")
             self._type_slow(box, name[:4])
-            if not self._pick_autocomplete_item([n for n in needles if n], timeout_s=5.0):
-                raise EngineError(f"{label} station '{station}': no autocomplete match")
+            picked = self._pick_autocomplete_item([n for n in needles if n], timeout_s=6.0)
+        if not picked:
+            raise EngineError(f"{label} station '{station}': no autocomplete match")
+        # Give PrimeNG a moment to propagate the selection to the input value.
+        self.page.wait_for_timeout(400)
         value = box.input_value() or ""
         if code and code.upper() not in value.upper():
             raise EngineError(f"{label} station did not stick (input shows '{value}')")
         self._status(f"{label} station set: {value or station}")
 
     def _pick_autocomplete_item(self, needles: list[str], timeout_s: float) -> bool:
+        # Covers PrimeNG v7-v17: class-based panels, ARIA listbox, overlay wrapper
         items_sel = (
+            "li[role='option'], li.p-autocomplete-item, "
             ".p-autocomplete-panel li, .ui-autocomplete-panel li, "
-            "p-autocomplete-panel li, ul[role='listbox'] li"
+            "p-autocomplete-panel li, ul[role='listbox'] li, "
+            ".p-overlay-content li, .p-autocomplete-items li"
         )
+        last_texts: list[str] = []
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
             self._check_cancel()
@@ -828,18 +881,57 @@ class BookingEngine:
                     texts = []
                     for i in range(min(n, 25)):
                         try:
-                            texts.append(items.nth(i).inner_text(timeout=500))
+                            texts.append(items.nth(i).inner_text(timeout=500).strip())
                         except Exception:
                             texts.append("")
+                    last_texts = texts
                     for needle in needles:
                         for i, text in enumerate(texts):
                             if needle.upper() in text.upper():
-                                items.nth(i).click()
+                                try:
+                                    items.nth(i).click(timeout=1500)
+                                except Exception:
+                                    # JS click as fallback for click-intercepted PrimeNG items
+                                    items.nth(i).evaluate("el => el.click()")
                                 return True
+                else:
+                    # No items found via Playwright selector — try JS querySelectorAll
+                    for needle in needles:
+                        if needle and self._js_pick_autocomplete(needle):
+                            return True
             except Exception:
                 pass
             self.page.wait_for_timeout(100)
+        if last_texts:
+            self._status(
+                f"Autocomplete timeout — visible items: {last_texts[:5]}, "
+                f"needles: {needles}"
+            )
         return False
+
+    def _js_pick_autocomplete(self, needle: str) -> bool:
+        """Click the first visible autocomplete li whose text contains needle."""
+        try:
+            return bool(self.page.evaluate(
+                """(needle) => {
+                    const sel = [
+                        'li[role="option"]', 'li.p-autocomplete-item',
+                        '.p-autocomplete-panel li', 'ul[role="listbox"] li',
+                        '.p-overlay-content li'
+                    ].join(', ');
+                    for (const li of document.querySelectorAll(sel)) {
+                        if (li.offsetParent !== null &&
+                                li.textContent.toUpperCase().includes(needle.toUpperCase())) {
+                            li.click();
+                            return true;
+                        }
+                    }
+                    return false;
+                }""",
+                needle,
+            ))
+        except Exception:
+            return False
 
     # -- date ----------------------------------------------------------
 
