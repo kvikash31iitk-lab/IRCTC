@@ -63,6 +63,14 @@ assert pats[0] == "Sat, 13 Jun", pats
 assert be._split_station("NEW DELHI - NDLS") == ("NEW DELHI", "NDLS")
 print(f"[6] engine ok: date patterns {pats}")
 
+# --- engine: dead-page detection & closed-target error classification --------
+assert be._page_alive() is False  # no browser launched in this test
+assert be._is_target_closed(RuntimeError(
+    "Locator.count: Target page, context or browser has been closed"))
+assert be._is_target_closed(RuntimeError("Connection closed while reading from the driver"))
+assert not be._is_target_closed(RuntimeError("From station: no autocomplete match"))
+print("[6b] closed-tab detection + recovery error classification ok")
+
 # --- full GUI build (window withdrawn, no browser) ---------------------------
 import tkinter as tk
 

@@ -158,9 +158,21 @@ class BookingEngine:
         elapsed = 0.0
         try:
             self._launch_browser()
-            self._ensure_login()
-            self.cb.on_phase("prefill")
-            self._prefill_search_form()
+            recoveries = 0
+            while True:
+                try:
+                    self._ensure_login()
+                    self.cb.on_phase("prefill")
+                    self._prefill_search_form()
+                    break
+                except (EngineCancelled, EngineError):
+                    raise
+                except Exception as exc:
+                    recoveries += 1
+                    if recoveries > 2 or not self._is_target_closed(exc):
+                        raise
+                    self._status("⚠ The browser/tab closed mid-step — recovering and retrying…")
+                    self._recover_session("during login/prefill")
             self.cb.on_phase("countdown")
             self._countdown()
 
@@ -252,14 +264,105 @@ class BookingEngine:
         self._context.add_init_script(
             "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
         )
+        try:
+            self._browser.on("disconnected", self._on_browser_disconnected)
+        except Exception:
+            pass
         self.page = self._context.new_page()
-        self.page.set_default_timeout(15000)
+        self._wire_page()
+        try:
+            self._context.on("page", self._on_new_page_event)
+        except Exception:
+            pass
 
     def _save_auth_state(self) -> None:
         try:
             self._context.storage_state(path=str(AUTH_STATE_PATH))
         except Exception:
+            self._status("Could not save the IRCTC session (browser window gone?).")
+
+    # -- session self-healing --------------------------------------------
+
+    def _wire_page(self) -> None:
+        self.page.set_default_timeout(15000)
+        try:
+            self.page.on("close", self._on_page_closed_event)
+        except Exception:
             pass
+
+    def _on_page_closed_event(self, _page=None) -> None:
+        if not self.shutdown_requested.is_set():
+            self._status("⚠ The automated tab was closed — will auto-recover at the next step.")
+
+    def _on_browser_disconnected(self, _browser=None) -> None:
+        if not self.shutdown_requested.is_set():
+            self._status("⚠ Browser window closed or crashed — will relaunch at the next step.")
+
+    def _on_new_page_event(self, _page=None) -> None:
+        # self.page is None only while _recover_session is opening its own tab.
+        if self.page is not None and not self.shutdown_requested.is_set():
+            self._status("Site opened a new browser tab.")
+
+    def _page_alive(self) -> bool:
+        try:
+            return self.page is not None and not self.page.is_closed()
+        except Exception:
+            return False
+
+    @staticmethod
+    def _is_target_closed(exc: Exception) -> bool:
+        """True for Playwright's page/context/browser-died family of errors."""
+        text = f"{type(exc).__name__}: {exc}"
+        return any(s in text for s in (
+            "has been closed",
+            "Target closed",
+            "TargetClosedError",
+            "browser has been disconnected",
+            "Connection closed",
+        ))
+
+    def _recover_session(self, during: str) -> None:
+        """Bring ``self.page`` back to a live train-search tab.
+
+        Tier 1: adopt another open tab in the same browser (login flows can
+        strand the user in a second tab). Tier 2: open a fresh tab. Tier 3:
+        the whole browser died — relaunch it; auth_state.json restores the
+        login whenever it was saved. Leaves the page on SEARCH_URL with the
+        search form rendered, so login-wait/prefill can resume directly.
+        """
+        self._status(f"⚠ Lost the browser tab {during} — recovering…")
+        self.page = None
+        try:
+            pages = [p for p in self._context.pages if not p.is_closed()]
+            adopted = bool(pages)
+            self.page = pages[-1] if pages else self._context.new_page()
+            self._wire_page()
+            self._status("Recovered: switched to a surviving tab." if adopted
+                         else "Recovered: opened a fresh tab in the same browser.")
+        except Exception:
+            self.page = None
+        if self.page is None:
+            for closer in (
+                lambda: self._context and self._context.close(),
+                lambda: self._browser and self._browser.close(),
+                lambda: self._pw and self._pw.stop(),
+            ):
+                try:
+                    closer()
+                except Exception:
+                    pass
+            self._context = self._browser = self._pw = None
+            self._launch_browser()
+            self._status("Recovered: relaunched the browser (saved session reloaded).")
+        url = ""
+        try:
+            url = self.page.url or ""
+        except Exception:
+            pass
+        if "irctc.co.in/nget" not in url:
+            self.page.goto(SEARCH_URL, wait_until="domcontentloaded", timeout=90000)
+        self._wait_any(["input[role='searchbox']", "p-autocomplete input"], 60)
+        self._dismiss_dialogs()
 
     def _park_until_shutdown(self) -> None:
         """Keep the browser alive (user may be mid-payment) until told to quit."""
@@ -282,13 +385,26 @@ class BookingEngine:
             stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
             shot = LOGS_DIR / f"error-{stamp}.png"
             txt = LOGS_DIR / f"error-{stamp}.txt"
+            try:
+                open_pages = (len([p for p in self._context.pages if not p.is_closed()])
+                              if self._context else 0)
+            except Exception:
+                open_pages = -1
+            url = "?"
+            if self._page_alive():
+                try:
+                    url = self.page.url
+                except Exception:
+                    pass
             txt.write_text(
-                f"url: {self.page.url if self.page else '?'}\n\n{traceback.format_exc()}",
+                f"url: {url}\npage_alive: {self._page_alive()}  "
+                f"open_pages: {open_pages}\n\n{traceback.format_exc()}",
                 encoding="utf-8",
             )
-            if self.page:
+            if self._page_alive():
                 self.page.screenshot(path=str(shot))
-            return f"(Diagnostics saved to {shot.name})"
+                return f"(Diagnostics saved to {shot.name})"
+            return f"(Traceback saved to {txt.name})"
         except Exception:
             return ""
 
@@ -386,10 +502,16 @@ class BookingEngine:
                      "'I have logged in' — or the engine will detect it automatically.")
         while not self.login_confirmed.is_set():
             self._check_cancel()
+            if not self._page_alive():
+                self._recover_session("while waiting for login")
+                continue
             if self._is_logged_in():
                 self._status("Login detected.")
                 break
             time.sleep(1.0)
+        if not self._page_alive():
+            # The window died and the user pressed the button anyway.
+            self._recover_session("after login confirmation")
         self._save_auth_state()
 
     def _is_logged_in(self) -> bool:
@@ -792,6 +914,9 @@ class BookingEngine:
                 continue
             # Chunk elapsed normally → periodic form-drift check.
             if (self.target_time - self.tsync.now_ist()).total_seconds() > 5:
+                if not self._page_alive():
+                    self._refill()  # recovers the session first, then re-fills
+                    continue
                 ok = self._verify_form()
                 self.cb.on_form_status(ok)
                 if not ok:
@@ -815,6 +940,8 @@ class BookingEngine:
 
     def _refill(self) -> None:
         try:
+            if not self._page_alive():
+                self._recover_session("before re-fill")
             self._prefill_search_form()
         except Exception as exc:
             self.cb.on_form_status(False)
@@ -836,6 +963,10 @@ class BookingEngine:
     # ------------------------------------------------------------------
 
     def _submit_and_find_train(self) -> None:
+        if not self._page_alive():
+            self._status("⚠ Tab lost at fire time — emergency recovery (costs precious seconds)…")
+            self._recover_session("at fire time")
+            self._prefill_search_form()
         self._status("T=0 — submitting search.")
         btn = self._wait_any(
             [
