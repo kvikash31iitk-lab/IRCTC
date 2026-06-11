@@ -1,0 +1,21 @@
+[
+  {
+    "preset_id": "6be5202f",
+    "label": "vikash kanpur",
+    "from_station": "NEW DELHI - NDLS",
+    "to_station": "KANPUR CENTRAL - CNB",
+    "journey_date": "2026-04-09",
+    "travel_class": "SL",
+    "quota": "TATKAL",
+    "train_number": "12312",
+    "mobile_number": "9830170806",
+    "email": "kvikash31.iitk@gmail.com",
+    "booking_url": "",
+    "availability_url": "",
+    "availability_keywords": ["AVAILABLE", "RAC"],
+    "is_default": true,
+    "passengers": [
+      {"name": "vikash kumar", "age": 38, "gender": "Male", "berth_preference": "Lower"}
+    ]
+  }
+]

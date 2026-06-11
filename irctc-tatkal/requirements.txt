@@ -1,0 +1,5 @@
+# Python 3.10+ (tested on 3.14). After installing, also run:
+#   python -m playwright install chromium
+playwright>=1.55
+ntplib>=0.4
+Pillow>=10.0

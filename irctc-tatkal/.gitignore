@@ -1,0 +1,6 @@
+# Browser session / login state — never commit cookies.
+auth_state.json
+user-data/
+logs/
+__pycache__/
+*.pyc
