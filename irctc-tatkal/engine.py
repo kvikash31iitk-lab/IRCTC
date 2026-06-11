@@ -117,6 +117,7 @@ class BookingEngine:
         self._browser = None
         self._context = None
         self.page = None
+        self._persistent_ctx = False  # True when using launch_persistent_context
 
     # ------------------------------------------------------------------
     # Public API (called from the GUI thread)
@@ -218,20 +219,97 @@ class BookingEngine:
     # Browser lifecycle
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _chrome_user_data_dir() -> "Path | None":
+        """Return Chrome's user-data directory for the current OS user, or None."""
+        import os
+        if os.name == "nt":
+            base = os.environ.get("LOCALAPPDATA", "")
+            if base:
+                p = Path(base) / "Google" / "Chrome" / "User Data"
+                return p if p.exists() else None
+        else:
+            for p in (
+                Path.home() / "Library" / "Application Support" / "Google" / "Chrome",
+                Path.home() / ".config" / "google-chrome",
+            ):
+                if p.exists():
+                    return p
+        return None
+
     def _launch_browser(self) -> None:
-        self._status("Launching Chromium…")
+        """Launch browser and set self.page to a live tab on the train-search URL.
+
+        Strategy 1 (preferred): Playwright ``launch_persistent_context`` with the
+        user's real Chrome profile. IRCTC cannot distinguish this from a normal
+        browsing session — real cookies, real fingerprint, real user-agent — so
+        bot-detection / "Unable to Process Request" errors don't fire. If the
+        profile is locked (Chrome already open), falls through to Strategy 2.
+
+        Strategy 2 (fallback): clean-launch Chrome/Edge/Chromium with the saved
+        ``auth_state.json`` session. Warn the user if bot-detection is a concern.
+        """
+        self._persistent_ctx = False
+        self._status("Launching browser…")
         try:
             from playwright.sync_api import sync_playwright
-        except ImportError as exc:  # pragma: no cover
+        except ImportError as exc:
             raise EngineError(
                 "Playwright is not installed. Run:  pip install playwright  "
                 "then:  python -m playwright install chromium"
             ) from exc
 
         self._pw = sync_playwright().start()
-        # Prefer the user's real Chrome: best anti-bot fingerprint, and the
-        # bundled Chrome-for-Testing build fails on some Windows 10 machines
-        # (side-by-side configuration error). Edge ships with every Windows.
+        _LAUNCH_ARGS = [
+            "--disable-blink-features=AutomationControlled",
+            "--start-maximized",
+        ]
+        _INIT_SCRIPT = (
+            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
+        )
+
+        # ── Strategy 1: real Chrome profile ──────────────────────────────────
+        chrome_base = self._chrome_user_data_dir()
+        if chrome_base:
+            for profile_name in ("Default", "Profile 1", "Profile 2", "Profile 3"):
+                prof = chrome_base / profile_name
+                if not prof.exists():
+                    continue
+                try:
+                    self._context = self._pw.chromium.launch_persistent_context(
+                        user_data_dir=str(prof),
+                        channel="chrome",
+                        headless=False,
+                        args=_LAUNCH_ARGS,
+                        no_viewport=True,
+                    )
+                    self._context.add_init_script(_INIT_SCRIPT)
+                    try:
+                        self._context.on("page", self._on_new_page_event)
+                    except Exception:
+                        pass
+                    self._browser = None
+                    self._persistent_ctx = True
+                    self._status(
+                        f"Browser: Chrome with real profile '{profile_name}' — "
+                        "IRCTC login bot-detection bypassed."
+                    )
+                    # Use a fresh tab so existing Chrome tabs are untouched.
+                    self.page = self._context.new_page()
+                    self._wire_page()
+                    return
+                except Exception as exc:
+                    self._status(
+                        f"Chrome profile '{profile_name}' unavailable "
+                        f"({str(exc)[:100]}) — trying next."
+                    )
+
+        # ── Strategy 2: clean launch ──────────────────────────────────────────
+        self._status(
+            "Using clean-launch mode (Chrome profile locked or not found). "
+            "If IRCTC blocks login with 'Unable to Process Request', "
+            "close Chrome and restart the app so it can use your real profile."
+        )
         last_error: Exception | None = None
         for channel, label in (
             ("chrome", "installed Google Chrome"),
@@ -240,12 +318,9 @@ class BookingEngine:
         ):
             try:
                 self._browser = self._pw.chromium.launch(
-                    headless=False,  # IRCTC blocks headless browsers.
+                    headless=False,
                     channel=channel,
-                    args=[
-                        "--disable-blink-features=AutomationControlled",
-                        "--start-maximized",
-                    ],
+                    args=_LAUNCH_ARGS,
                 )
                 self._status(f"Browser: {label}.")
                 break
@@ -261,19 +336,17 @@ class BookingEngine:
             ctx_kwargs["storage_state"] = str(AUTH_STATE_PATH)
             self._status("Loaded saved IRCTC session (auth_state.json).")
         self._context = self._browser.new_context(**ctx_kwargs)
-        self._context.add_init_script(
-            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
-        )
+        self._context.add_init_script(_INIT_SCRIPT)
         try:
             self._browser.on("disconnected", self._on_browser_disconnected)
         except Exception:
             pass
-        self.page = self._context.new_page()
-        self._wire_page()
         try:
             self._context.on("page", self._on_new_page_event)
         except Exception:
             pass
+        self.page = self._context.new_page()
+        self._wire_page()
 
     def _save_auth_state(self) -> None:
         try:
