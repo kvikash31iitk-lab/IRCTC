@@ -1141,11 +1141,27 @@ class BookingEngine:
                 self.refill_requested.clear()
                 self._refill()
                 continue
-            # Chunk elapsed normally → periodic form-drift check.
+            # Chunk elapsed normally → periodic form-drift + session check.
             if (self.target_time - self.tsync.now_ist()).total_seconds() > 5:
                 if not self._page_alive():
                     self._refill()  # recovers the session first, then re-fills
                     continue
+                # Keep the IRCTC session alive with a lightweight authenticated ping.
+                self._session_keepalive()
+                # If the session expired anyway, re-trigger the login flow.
+                if not self._is_logged_in():
+                    self._status("⚠ IRCTC session expired during countdown — "
+                                 "please log in again in the browser, then press "
+                                 "'I have logged in'.")
+                    self.login_confirmed.clear()
+                    self.cb.on_login_required()
+                    while not self.login_confirmed.is_set():
+                        self._check_cancel()
+                        if self._is_logged_in():
+                            self._status("Re-login detected.")
+                            break
+                        time.sleep(1.0)
+                    self._save_auth_state()
                 ok = self._verify_form()
                 self.cb.on_form_status(ok)
                 if not ok:
@@ -1186,6 +1202,60 @@ class BookingEngine:
             self._status("Connection pre-warmed.")
         except Exception:
             pass
+
+    def _session_keepalive(self) -> None:
+        """Ping an IRCTC authenticated endpoint to prevent session expiry.
+
+        IRCTC expires sessions after ~30 min of inactivity. The countdown can
+        last hours (armed for next morning's tatkal). A single silent fetch to
+        a lightweight protected resource resets the idle timer without
+        navigating the page.
+        """
+        try:
+            self.page.evaluate(
+                "fetch('/eticketing/protected/mapps1/userPreferences',"
+                " {credentials:'include', cache:'no-store'})"
+                ".catch(() => {})"
+            )
+        except Exception:
+            pass
+
+    def _check_post_booking_redirect(self) -> None:
+        """Raise an informative error if IRCTC landed on an error/login page.
+
+        Called immediately after Book Now and after each wait_url timeout so
+        the engine never silently burns 28 seconds waiting for a page that
+        will never arrive.
+        """
+        try:
+            url = self.page.url or ""
+        except Exception:
+            return
+        if "/nget/error" in url:
+            try:
+                body = self.page.inner_text("body") or ""
+            except Exception:
+                body = ""
+            if "login" in body.lower():
+                raise EngineError(
+                    "IRCTC session expired and you were logged out before "
+                    "the booking could complete — click 'New run', log in "
+                    "again, and re-arm. (The session keep-alive runs every "
+                    "30 s during countdown, but a very long wait or a "
+                    "network hiccup can still let it expire.)"
+                )
+            raise EngineError(
+                "IRCTC showed an error page after Book Now "
+                f"({url}). Possible causes: tatkal quota just closed, a "
+                "server-side glitch, or another open IRCTC session displaced "
+                "this one. Try a new run."
+            )
+        # Redirected to login (session expired silently).
+        if "/nget/auth" in url or "/nget/login" in url:
+            raise EngineError(
+                "IRCTC redirected to the login page after Book Now — "
+                "session expired. Click 'New run' and log in again."
+            )
 
     # ------------------------------------------------------------------
     # T=0: search → train card → class → availability → Book Now
@@ -1435,10 +1505,13 @@ class BookingEngine:
     # ------------------------------------------------------------------
 
     def _fill_passenger_page(self) -> None:
+        self._check_post_booking_redirect()   # catch /nget/error immediately
         if not self._wait_url(r".*psgninput", 20):
+            self._check_post_booking_redirect()
             # A confirm dialog may have eaten the Book Now click.
             self._dismiss_dialogs()
             if not self._wait_url(r".*psgninput", 8):
+                self._check_post_booking_redirect()
                 raise EngineError("Passenger page did not load after Book Now")
         self._status(f"Passenger page (+{self._elapsed():.1f}s)")
 
@@ -1561,9 +1634,12 @@ class BookingEngine:
     # ------------------------------------------------------------------
 
     def _handle_captcha_page(self) -> None:
+        self._check_post_booking_redirect()
         if not self._wait_url(r".*reviewBooking", 25):
+            self._check_post_booking_redirect()
             self._dismiss_dialogs()
             if not self._wait_url(r".*reviewBooking", 10):
+                self._check_post_booking_redirect()
                 raise EngineError("Review/captcha page did not load")
         self._status(f"Review page — captcha needed (+{self._elapsed():.1f}s)")
 
