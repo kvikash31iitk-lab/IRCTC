@@ -20,10 +20,15 @@ Design notes
 
 from __future__ import annotations
 
+import os
 import re
+import shutil
+import subprocess
+import sys
 import threading
 import time
 import traceback
+import urllib.request
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -36,6 +41,11 @@ AUTH_STATE_PATH = BASE_DIR / "auth_state.json"
 LOGS_DIR = BASE_DIR / "logs"
 
 SEARCH_URL = "https://www.irctc.co.in/nget/train-search"
+
+# Port for attaching to a normally-launched Chrome over the DevTools Protocol.
+# Chrome started this way carries none of Playwright's automation switches, so
+# IRCTC's bot-detection ("Unable to Process Request") does not fire.
+CDP_PORT = 9222
 
 # Seconds before T=0 at which we fire a throwaway fetch so the TCP+TLS
 # connection is already open when the real search goes out.
@@ -118,6 +128,8 @@ class BookingEngine:
         self._context = None
         self.page = None
         self._persistent_ctx = False  # True when using launch_persistent_context
+        self._cdp_mode = False        # True when attached over CDP (preferred)
+        self._chrome_proc: subprocess.Popen | None = None  # our launched Chrome
 
     # ------------------------------------------------------------------
     # Public API (called from the GUI thread)
@@ -237,19 +249,152 @@ class BookingEngine:
                     return p
         return None
 
+    @staticmethod
+    def _find_chrome_exe() -> str | None:
+        """Locate the real Google Chrome executable, or None."""
+        candidates: list[Path] = []
+        if os.name == "nt":
+            for var in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"):
+                base = os.environ.get(var)
+                if base:
+                    candidates.append(
+                        Path(base) / "Google" / "Chrome" / "Application" / "chrome.exe")
+        elif sys.platform == "darwin":
+            candidates.append(
+                Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"))
+        for c in candidates:
+            if c.exists():
+                return str(c)
+        for name in ("google-chrome", "google-chrome-stable", "chrome",
+                     "chromium", "chromium-browser"):
+            found = shutil.which(name)
+            if found:
+                return found
+        return None
+
+    @staticmethod
+    def _cdp_profile_dir() -> Path:
+        """A dedicated, persistent profile dir for the CDP-attached Chrome.
+
+        Kept OUT of Chrome's Default dir on purpose: Chrome 136+ refuses remote
+        debugging on the Default profile, and a separate dir avoids clashing
+        with the user's everyday browsing (and IRCTC's one-session rule). The
+        user logs in here once; cookies then persist across runs on disk.
+        """
+        if os.name == "nt":
+            base = Path(os.environ.get("LOCALAPPDATA") or Path.home())
+        elif sys.platform == "darwin":
+            base = Path.home() / "Library" / "Application Support"
+        else:
+            base = Path(os.environ.get("XDG_DATA_HOME") or (Path.home() / ".local" / "share"))
+        d = base / "irctc-tatkal" / "chrome-profile"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def _cdp_endpoint_ready(self, port: int) -> bool:
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version",
+                                        timeout=1.0) as r:
+                return r.status == 200
+        except Exception:
+            return False
+
+    def _kill_chrome_proc(self) -> None:
+        proc, self._chrome_proc = self._chrome_proc, None
+        if proc is None:
+            return
+        try:
+            proc.terminate()
+            proc.wait(timeout=5)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+    def _launch_via_cdp(self) -> bool:
+        """Start Chrome as a plain process and attach Playwright over CDP.
+
+        Returns True and sets ``self.page`` on success; False to fall through
+        to the profile/clean strategies.
+        """
+        chrome = self._find_chrome_exe()
+        if not chrome:
+            self._status("Real Chrome not found — skipping CDP mode.")
+            return False
+
+        # If something is already serving the debug port (e.g. a previous run),
+        # attach to it rather than launching a second Chrome.
+        if not self._cdp_endpoint_ready(CDP_PORT):
+            profile = self._cdp_profile_dir()
+            self._status(f"Starting Chrome for CDP (profile: {profile}).")
+            self._chrome_proc = subprocess.Popen(
+                [
+                    chrome,
+                    f"--remote-debugging-port={CDP_PORT}",
+                    f"--user-data-dir={profile}",
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                    "--start-maximized",
+                    SEARCH_URL,
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                if self._chrome_proc.poll() is not None:
+                    self._status("Chrome exited immediately (already running on "
+                                 "this profile?) — CDP mode unavailable.")
+                    return False
+                if self._cdp_endpoint_ready(CDP_PORT):
+                    break
+                time.sleep(0.3)
+            else:
+                self._status("Chrome debug port never opened — falling back.")
+                self._kill_chrome_proc()
+                return False
+
+        self._browser = self._pw.chromium.connect_over_cdp(f"http://127.0.0.1:{CDP_PORT}")
+        try:
+            self._browser.on("disconnected", self._on_browser_disconnected)
+        except Exception:
+            pass
+        ctxs = self._browser.contexts
+        self._context = ctxs[0] if ctxs else self._browser.new_context(no_viewport=True)
+        try:
+            self._context.on("page", self._on_new_page_event)
+        except Exception:
+            pass
+        # Reuse the tab Chrome already opened on SEARCH_URL; do NOT inject the
+        # webdriver override — a normally-launched Chrome is already native here.
+        pages = [p for p in self._context.pages if not p.is_closed()]
+        self.page = pages[0] if pages else self._context.new_page()
+        self._cdp_mode = True
+        self._wire_page()
+        self._status("Browser: real Chrome via CDP — clean fingerprint, "
+                     "no automation flags. IRCTC sees a normal browser.")
+        return True
+
     def _launch_browser(self) -> None:
         """Launch browser and set self.page to a live tab on the train-search URL.
 
-        Strategy 1 (preferred): Playwright ``launch_persistent_context`` with the
-        user's real Chrome profile. IRCTC cannot distinguish this from a normal
-        browsing session — real cookies, real fingerprint, real user-agent — so
-        bot-detection / "Unable to Process Request" errors don't fire. If the
-        profile is locked (Chrome already open), falls through to Strategy 2.
+        Strategy 0 (preferred): start the real Chrome as an ORDINARY process
+        (``--remote-debugging-port`` only — none of Playwright's automation
+        switches) and attach over CDP. This is the one mode IRCTC's
+        bot-detection cannot tell from a human's Chrome, because the browser
+        was not launched in automation mode: ``navigator.webdriver`` is a
+        native ``false``, no ``--enable-automation`` infobar, normal fingerprint.
 
-        Strategy 2 (fallback): clean-launch Chrome/Edge/Chromium with the saved
-        ``auth_state.json`` session. Warn the user if bot-detection is a concern.
+        Strategy 1: Playwright ``launch_persistent_context`` with the user's
+        Chrome profile. Real cookies/fingerprint, but Playwright still adds
+        automation switches, so IRCTC MAY still block login here.
+
+        Strategy 2 (last resort): clean-launch Chrome/Edge/Chromium with the
+        saved ``auth_state.json`` session.
         """
         self._persistent_ctx = False
+        self._cdp_mode = False
         self._status("Launching browser…")
         try:
             from playwright.sync_api import sync_playwright
@@ -267,6 +412,14 @@ class BookingEngine:
         _INIT_SCRIPT = (
             "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
         )
+
+        # ── Strategy 0: attach to a normally-launched Chrome over CDP ─────────
+        try:
+            if self._launch_via_cdp():
+                return
+        except Exception as exc:
+            self._status(f"CDP attach failed ({str(exc)[:120]}) — trying profile mode.")
+            self._kill_chrome_proc()
 
         # ── Strategy 1: real Chrome profile ──────────────────────────────────
         chrome_base = self._chrome_user_data_dir()
@@ -291,8 +444,9 @@ class BookingEngine:
                     self._browser = None
                     self._persistent_ctx = True
                     self._status(
-                        f"Browser: Chrome with real profile '{profile_name}' — "
-                        "IRCTC login bot-detection bypassed."
+                        f"Browser: Chrome with real profile '{profile_name}' "
+                        "(profile mode — IRCTC may still block login; CDP mode "
+                        "is preferred)."
                     )
                     # Use a fresh tab so existing Chrome tabs are untouched.
                     self.page = self._context.new_page()
@@ -424,6 +578,7 @@ class BookingEngine:
                     closer()
                 except Exception:
                     pass
+            self._kill_chrome_proc()
             self._context = self._browser = self._pw = None
             self._launch_browser()
             self._status("Recovered: relaunched the browser (saved session reloaded).")
@@ -450,6 +605,7 @@ class BookingEngine:
                 closer()
             except Exception:
                 pass
+        self._kill_chrome_proc()  # close the Chrome we started for CDP
 
     def _capture_failure(self, exc: Exception) -> str:
         """Screenshot + traceback into logs/ so 10:00 AM failures are debuggable."""
