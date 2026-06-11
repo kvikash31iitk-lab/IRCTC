@@ -1119,6 +1119,7 @@ class BookingEngine:
             f"({self.target_time.strftime('%d %b')}). FIRE NOW overrides."
         )
         stop = {"fire": self.fire_now, "cancel": self.cancel, "refill": self.refill_requested}
+        _session_refreshed = False  # do one full navigation refresh ~120s before fire
 
         while True:
             now = self.tsync.now_ist()
@@ -1140,6 +1141,15 @@ class BookingEngine:
             if reason == "refill":
                 self.refill_requested.clear()
                 self._refill()
+                _session_refreshed = True  # re-fill counts as a live navigation
+                continue
+            # T-120s: navigate to search page to reset IRCTC's activity timer.
+            # Pure form-fill interactions don't reset IRCTC's "idle" clock;
+            # only a real page.goto() does. Skip if < 120s remain (too tight).
+            remaining_now = (self.target_time - self.tsync.now_ist()).total_seconds()
+            if not _session_refreshed and remaining_now <= 120:
+                self._session_refresh()
+                _session_refreshed = True
                 continue
             # Chunk elapsed normally → periodic form-drift + session check.
             if (self.target_time - self.tsync.now_ist()).total_seconds() > 5:
@@ -1203,6 +1213,43 @@ class BookingEngine:
         except Exception:
             pass
 
+    def _session_refresh(self) -> None:
+        """Navigate back to the search page to reset IRCTC's Angular session timer.
+
+        IRCTC's SPA tracks activity at the page-navigation level, not at the
+        DOM-interaction level. Playwright form fills keep the DOM tidy, but
+        IRCTC's timer only resets on a genuine page.goto(). After ~15-30 min
+        without a navigation (e.g. a long countdown) the next significant
+        click (Search Trains, Book Now) hits /nget/error "idle for a long time".
+
+        This is called ~120 s before fire to guarantee the session is live,
+        plus proactively when /nget/error is already showing before a search.
+        """
+        self._status("Session refresh: re-navigating to keep IRCTC session alive…")
+        try:
+            self.page.goto(SEARCH_URL, wait_until="domcontentloaded", timeout=30000)
+            self._wait_any(["input[role='searchbox']", "p-autocomplete input"], 20)
+            self._dismiss_dialogs()
+        except Exception as exc:
+            self._status(f"Session refresh navigation failed ({exc}) — continuing.")
+            return
+        if not self._is_logged_in():
+            self._status("⚠ Session expired during refresh — log in again and press "
+                         "'I have logged in'.")
+            self.login_confirmed.clear()
+            self.cb.on_login_required()
+            while not self.login_confirmed.is_set():
+                self._check_cancel()
+                if self._is_logged_in():
+                    self._status("Re-login detected.")
+                    break
+                time.sleep(1.0)
+            self._save_auth_state()
+        try:
+            self._prefill_search_form()
+        except Exception as exc:
+            self._status(f"Re-fill after session refresh failed: {exc}")
+
     def _session_keepalive(self) -> None:
         """Ping an IRCTC authenticated endpoint to prevent session expiry.
 
@@ -1221,12 +1268,10 @@ class BookingEngine:
             pass
 
     def _check_post_booking_redirect(self) -> None:
-        """Raise an informative error if IRCTC landed on an error/login page.
+        self._check_irctc_error_page("after Book Now")
 
-        Called immediately after Book Now and after each wait_url timeout so
-        the engine never silently burns 28 seconds waiting for a page that
-        will never arrive.
-        """
+    def _check_irctc_error_page(self, step: str = "during this step") -> None:
+        """Raise an informative error if IRCTC landed on an error/login page."""
         try:
             url = self.page.url or ""
         except Exception:
@@ -1238,22 +1283,20 @@ class BookingEngine:
                 body = ""
             if "login" in body.lower():
                 raise EngineError(
-                    "IRCTC session expired and you were logged out before "
-                    "the booking could complete — click 'New run', log in "
-                    "again, and re-arm. (The session keep-alive runs every "
-                    "30 s during countdown, but a very long wait or a "
-                    "network hiccup can still let it expire.)"
+                    f"IRCTC session expired {step} and you were logged out. "
+                    "Click 'New run', log in again, and re-arm. "
+                    "(If this keeps happening, close and relaunch the app so "
+                    "it opens a fresh Chrome session.)"
                 )
             raise EngineError(
-                "IRCTC showed an error page after Book Now "
-                f"({url}). Possible causes: tatkal quota just closed, a "
-                "server-side glitch, or another open IRCTC session displaced "
-                "this one. Try a new run."
+                f"IRCTC showed an error page {step} ({url}). "
+                "Possible causes: session timed out ('idle for a long time'), "
+                "another open IRCTC session displaced this one, or a "
+                "server-side glitch. Try a new run."
             )
-        # Redirected to login (session expired silently).
         if "/nget/auth" in url or "/nget/login" in url:
             raise EngineError(
-                "IRCTC redirected to the login page after Book Now — "
+                f"IRCTC redirected to the login page {step} — "
                 "session expired. Click 'New run' and log in again."
             )
 
@@ -1266,6 +1309,10 @@ class BookingEngine:
             self._status("⚠ Tab lost at fire time — emergency recovery (costs precious seconds)…")
             self._recover_session("at fire time")
             self._prefill_search_form()
+        # If already on the error page (session expired while counting down
+        # and the T-120s refresh was skipped or failed), recover now.
+        self._check_irctc_error_page("at fire time (session may have expired — "
+                                     "try closing and relaunching the app)")
         self._status("T=0 — submitting search.")
         btn = self._wait_any(
             [
@@ -1282,6 +1329,7 @@ class BookingEngine:
             btn.evaluate("el => el.click()")  # never stall the race on this click
 
         if not self._wait_url(r".*/train-list", 15):
+            self._check_irctc_error_page("after Search Trains click")
             raise EngineError("Train list page did not load after search")
         # NOTE: app-train-avl-enq host elements report a zero-size box, which
         # fails Playwright's visibility check — wait on real layout elements.
