@@ -40,6 +40,12 @@ assert ps and ps[0]["train_number"] == "12312", ps
 assert presets.get_default_preset()["preset_id"] == "6be5202f"
 print(f"[4] presets ok: '{ps[0]['label']}' with {len(ps[0]['passengers'])} passenger(s)")
 
+# --- bundled IRCTC station list (backs the preset station pickers) ----------
+sts = presets.load_stations()
+assert len(sts) > 1000 and "NEW DELHI - NDLS" in sts, f"stations look wrong: {len(sts)}"
+assert "OLD DELHI - DLI" in sts and "KANPUR CENTRAL - CNB" in sts
+print(f"[4b] station list loaded: {len(sts)} IRCTC stations")
+
 # --- real NTP sync (network) ------------------------------------------------
 ok = ts.sync()
 if ok:

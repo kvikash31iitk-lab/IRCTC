@@ -8,12 +8,13 @@ touched from the engine thread.
 
 from __future__ import annotations
 
+import calendar as _calendar
 import io
 import re
 import threading
 import time
 import tkinter as tk
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from tkinter import messagebox, ttk
 from typing import Any
 
@@ -151,6 +152,8 @@ class App:
                    command=lambda: self._quick_date(1)).pack(side="left", padx=2)
         ttk.Button(row, text="Today +2", width=9,
                    command=lambda: self._quick_date(2)).pack(side="left", padx=2)
+        ttk.Button(row, text="📅", width=3,
+                   command=self._open_setup_calendar).pack(side="left", padx=2)
 
         ttk.Label(grid, text="Tatkal window", font=FONT_BOLD).grid(row=3, column=0, sticky="w", pady=3)
         self.window_box = ttk.Combobox(grid, state="readonly", values=WINDOW_CHOICES, width=48)
@@ -236,6 +239,20 @@ class App:
         target = (self.tsync.now_ist() + timedelta(days=days)).date()
         self.date_entry.delete(0, "end")
         self.date_entry.insert(0, target.isoformat())
+
+    def _open_setup_calendar(self) -> None:
+        try:
+            cur = datetime.strptime(self.date_entry.get().strip(), "%Y-%m-%d").date()
+        except ValueError:
+            cur = self.tsync.now_ist().date() + timedelta(days=1)
+        today = self.tsync.now_ist().date()
+
+        def pick(d: date) -> None:
+            self.date_entry.delete(0, "end")
+            self.date_entry.insert(0, d.isoformat())
+
+        CalendarPopup(self.root, initial=cur, on_pick=pick,
+                      min_date=today, max_date=today + timedelta(days=120))
 
     # ------------------------------------------------------------------
     # Launch / arm
@@ -590,6 +607,210 @@ class App:
             self.root.destroy()
 
 
+class StationPicker(ttk.Frame):
+    """Editable entry backed by IRCTC's station list.
+
+    Type any part of a station name or code and a dropdown shows matching
+    ``'NAME - CODE'`` rows; picking one writes the exact string the engine
+    feeds to IRCTC's own autocomplete. Matching is on the code (the most
+    selective field), so a slightly different display name still books the
+    right station. Free typing still works for anything not in the list.
+
+    The widget binds to the same ``textvariable`` the dialog already reads,
+    so ``_collect``/``_populate`` need no changes.
+    """
+
+    def __init__(self, parent: tk.Misc, textvariable: tk.StringVar,
+                 stations: list[str], width: int = 30) -> None:
+        super().__init__(parent)
+        self._all = stations
+        self._var = textvariable
+        self._width = width
+        self.entry = ttk.Entry(self, textvariable=textvariable, width=width)
+        self.entry.pack(side="left", fill="x", expand=True)
+        self._popup: tk.Toplevel | None = None
+        self._list: tk.Listbox | None = None
+        self.entry.bind("<KeyRelease>", self._on_key)
+        self.entry.bind("<Down>", self._to_list)
+        self.entry.bind("<Return>", self._on_entry_return)
+        self.entry.bind("<Escape>", lambda _e: self._close())
+        self.entry.bind("<FocusOut>", lambda _e: self.after(120, self._maybe_close))
+
+    def _matches(self, query: str) -> list[str]:
+        toks = query.upper().split()
+        if not toks:
+            return []
+        out: list[str] = []
+        for s in self._all:
+            u = s.upper()
+            if all(t in u for t in toks):
+                out.append(s)
+                if len(out) >= 40:
+                    break
+        return out
+
+    def _on_key(self, event: tk.Event) -> None:
+        if event.keysym in ("Up", "Down", "Return", "Escape", "Left", "Right",
+                            "Tab", "Shift_L", "Shift_R", "Control_L", "Control_R"):
+            return
+        query = self._var.get().strip()
+        matches = self._matches(query) if len(query) >= 2 else []
+        if not matches or (len(matches) == 1 and matches[0].upper() == query.upper()):
+            self._close()
+            return
+        self._show(matches)
+
+    def _show(self, matches: list[str]) -> None:
+        if self._popup is None or not self._popup.winfo_exists():
+            self._popup = tk.Toplevel(self)
+            self._popup.wm_overrideredirect(True)
+            self._list = tk.Listbox(self._popup, width=self._width + 6,
+                                    activestyle="dotbox", font=FONT_BASE,
+                                    exportselection=False)
+            self._list.pack()
+            self._list.bind("<Return>", self._accept_from_list)
+            self._list.bind("<Double-Button-1>", self._accept_from_list)
+            self._list.bind("<Escape>", lambda _e: self._close(focus_entry=True))
+            self._list.bind("<Up>", self._list_up)
+        assert self._list is not None
+        self._list.configure(height=min(10, len(matches)))
+        self._list.delete(0, "end")
+        for m in matches:
+            self._list.insert("end", m)
+        self.entry.update_idletasks()
+        x = self.entry.winfo_rootx()
+        y = self.entry.winfo_rooty() + self.entry.winfo_height()
+        self._popup.wm_geometry(f"+{x}+{y}")
+        self._popup.deiconify()
+        self._popup.lift()
+
+    def _to_list(self, _event=None) -> str:
+        if self._popup and self._list and self._list.size():
+            self._list.focus_set()
+            self._list.selection_clear(0, "end")
+            self._list.selection_set(0)
+            self._list.activate(0)
+            return "break"
+        return ""
+
+    def _list_up(self, _event=None) -> str:
+        sel = self._list.curselection() if self._list else ()
+        if sel and sel[0] == 0:
+            self.entry.focus_set()
+            self.entry.icursor("end")
+            return "break"
+        return ""
+
+    def _on_entry_return(self, _event=None) -> str:
+        if self._popup and self._list and self._list.size():
+            self._var.set(self._list.get(0))
+            self._close()
+            self.entry.icursor("end")
+            return "break"
+        return ""
+
+    def _accept_from_list(self, _event=None) -> str:
+        if self._list and self._list.curselection():
+            self._var.set(self._list.get(self._list.curselection()[0]))
+        self._close(focus_entry=True)
+        self.entry.icursor("end")
+        return "break"
+
+    def _maybe_close(self) -> None:
+        try:
+            foc = self.focus_get()
+        except Exception:
+            foc = None
+        if self._popup and foc is not None and (
+                foc is self._list or str(foc).startswith(str(self._popup))):
+            return
+        self._close()
+
+    def _close(self, focus_entry: bool = False) -> None:
+        if self._popup is not None:
+            try:
+                self._popup.destroy()
+            except tk.TclError:
+                pass
+            self._popup = None
+            self._list = None
+        if focus_entry:
+            self.entry.focus_set()
+
+
+class CalendarPopup(tk.Toplevel):
+    """A small month-grid date picker — pure Tkinter, no extra dependencies.
+
+    Opens as a modal next to its trigger button; clicking a day calls
+    ``on_pick(date)`` and closes. ``min_date``/``max_date`` grey out
+    out-of-range days (e.g. past dates or beyond IRCTC's 120-day window).
+    """
+
+    WEEK = ("Su", "Mo", "Tu", "We", "Th", "Fr", "Sa")
+
+    def __init__(self, parent: tk.Misc, initial: date, on_pick,
+                 min_date: date | None = None, max_date: date | None = None) -> None:
+        super().__init__(parent)
+        self.title("Pick a date")
+        self.resizable(False, False)
+        self._on_pick = on_pick
+        self._min = min_date
+        self._max = max_date
+        self._sel = initial if isinstance(initial, date) else None
+        self._view = (initial if isinstance(initial, date) else date.today()).replace(day=1)
+
+        hdr = ttk.Frame(self, padding=(8, 8, 8, 4))
+        hdr.pack(fill="x")
+        ttk.Button(hdr, text="‹", width=3, command=lambda: self._shift(-1)).pack(side="left")
+        self._title = ttk.Label(hdr, anchor="center", font=FONT_BOLD)
+        self._title.pack(side="left", expand=True, fill="x")
+        ttk.Button(hdr, text="›", width=3, command=lambda: self._shift(1)).pack(side="left")
+
+        self._grid = ttk.Frame(self, padding=(8, 0, 8, 8))
+        self._grid.pack()
+        self._render()
+
+        self.bind("<Escape>", lambda _e: self.destroy())
+        try:
+            self.transient(parent.winfo_toplevel())
+            self.geometry(f"+{parent.winfo_rootx()}+{parent.winfo_rooty() + 30}")
+            self.grab_set()
+        except tk.TclError:
+            pass  # parent not viewable (e.g. during tests) — stay non-modal
+
+    def _shift(self, months: int) -> None:
+        m = self._view.month - 1 + months
+        self._view = date(self._view.year + m // 12, m % 12 + 1, 1)
+        self._render()
+
+    def _render(self) -> None:
+        for w in self._grid.winfo_children():
+            w.destroy()
+        self._title.configure(text=self._view.strftime("%B %Y"))
+        for col, name in enumerate(self.WEEK):
+            ttk.Label(self._grid, text=name, font=FONT_BOLD, width=4,
+                      anchor="center").grid(row=0, column=col, padx=1, pady=1)
+        ndays = _calendar.monthrange(self._view.year, self._view.month)[1]
+        col = (self._view.weekday() + 1) % 7  # Sunday-first
+        row = 1
+        for day in range(1, ndays + 1):
+            d = date(self._view.year, self._view.month, day)
+            btn = tk.Button(self._grid, text=str(day), width=3, relief="flat",
+                            command=lambda dd=d: self._choose(dd))
+            if self._sel == d:
+                btn.configure(bg="#c62828", fg="white")
+            if (self._min and d < self._min) or (self._max and d > self._max):
+                btn.configure(state="disabled")
+            btn.grid(row=row, column=col, padx=1, pady=1)
+            col += 1
+            if col > 6:
+                col, row = 0, row + 1
+
+    def _choose(self, d: date) -> None:
+        self._on_pick(d)
+        self.destroy()
+
+
 class PresetDialog(tk.Toplevel):
     """Form editor for one preset — replaces hand-editing data/presets.json.
 
@@ -637,20 +858,26 @@ class PresetDialog(tk.Toplevel):
                 ttk.Label(body, text=hint, foreground="#666").grid(
                     row=r, column=2, sticky="w")
 
+        stations = preset_store.load_stations()
         add_row(0, "Label", ttk.Entry(body, textvariable=self.label_var, width=30),
                 "shown in the preset dropdown")
-        add_row(1, "From station", ttk.Entry(body, textvariable=self.from_var, width=30),
-                "NAME - CODE, e.g. DELHI - DLI")
-        add_row(2, "To station", ttk.Entry(body, textvariable=self.to_var, width=30),
-                "e.g. KANPUR CENTRAL - CNB")
+        add_row(1, "From station",
+                StationPicker(body, self.from_var, stations, width=30),
+                "type a name or code — picks from IRCTC")
+        add_row(2, "To station",
+                StationPicker(body, self.to_var, stations, width=30),
+                "e.g. type 'kanpur' or 'CNB'")
         add_row(3, "Train number", ttk.Entry(body, textvariable=self.train_var, width=10),
                 "5 digits")
         add_row(4, "Class", ttk.Combobox(body, textvariable=self.class_var,
                                          state="readonly", values=CLASS_CODES, width=8))
         add_row(5, "Quota", ttk.Combobox(body, textvariable=self.quota_var,
                                          state="readonly", values=QUOTAS, width=18))
-        add_row(6, "Journey date", ttk.Entry(body, textvariable=self.date_var, width=14),
-                "YYYY-MM-DD (changeable per run)")
+        date_row = ttk.Frame(body)
+        ttk.Entry(date_row, textvariable=self.date_var, width=14).pack(side="left")
+        ttk.Button(date_row, text="📅", width=3,
+                   command=self._open_calendar).pack(side="left", padx=(4, 0))
+        add_row(6, "Journey date", date_row, "YYYY-MM-DD — or pick from the calendar")
         add_row(7, "Mobile", ttk.Entry(body, textvariable=self.mobile_var, width=16),
                 "10 digits, optional")
         add_row(8, "Email", ttk.Entry(body, textvariable=self.email_var, width=30),
@@ -680,6 +907,16 @@ class PresetDialog(tk.Toplevel):
         btns.grid(row=11, column=0, columnspan=3, sticky="e")
         ttk.Button(btns, text="Save", command=self._save).pack(side="left", padx=4)
         ttk.Button(btns, text="Cancel", command=self.destroy).pack(side="left", padx=4)
+
+    def _open_calendar(self) -> None:
+        try:
+            cur = datetime.strptime(self.date_var.get().strip(), "%Y-%m-%d").date()
+        except ValueError:
+            cur = date.today() + timedelta(days=1)
+        today = date.today()
+        CalendarPopup(self, initial=cur,
+                      on_pick=lambda d: self.date_var.set(d.isoformat()),
+                      min_date=today, max_date=today + timedelta(days=120))
 
     def _populate(self) -> None:
         b = self._base

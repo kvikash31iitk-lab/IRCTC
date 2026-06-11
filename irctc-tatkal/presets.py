@@ -15,6 +15,9 @@ from typing import Any
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 PRESETS_PATH = DATA_DIR / "presets.json"
+STATIONS_PATH = DATA_DIR / "stations.json"
+
+_stations_cache: list[str] | None = None
 
 # Seeded if presets.json is missing, so the tool runs out of the box.
 _SEED_PRESET: dict[str, Any] = {
@@ -92,6 +95,25 @@ def delete_preset(preset_id: str) -> bool:
         return False
     save_presets(remaining)
     return True
+
+
+def load_stations() -> list[str]:
+    """IRCTC ``'NAME - CODE'`` strings for the preset station pickers.
+
+    Sourced once from the bundled ``data/stations.json`` (~9000 stations) and
+    cached. Returns ``[]`` if the file is missing or unreadable — the picker
+    then degrades to a plain free-text entry, so nothing breaks.
+    """
+    global _stations_cache
+    if _stations_cache is not None:
+        return _stations_cache
+    try:
+        data = json.loads(STATIONS_PATH.read_text(encoding="utf-8"))
+        _stations_cache = [s for s in data if isinstance(s, str)] \
+            if isinstance(data, list) else []
+    except (json.JSONDecodeError, OSError):
+        _stations_cache = []
+    return _stations_cache
 
 
 def get_preset(preset_id: str) -> dict[str, Any] | None:
